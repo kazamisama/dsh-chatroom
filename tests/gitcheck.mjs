@@ -7,7 +7,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { verifyDeclaration, describeVerification, toRelative } from '../lib/gitcheck.js'
+import { verifyDeclaration, describeVerification, toRelative, resolveWorktree } from '../lib/gitcheck.js'
 
 const run = promisify(execFile)
 
@@ -149,6 +149,62 @@ check('假的 ref 不算证据（仍 contradicted）', rl.verdict === 'contradic
 rl = await verifyDeclaration({ workspace: repo, files: ['ghost.py'] })
 check('没有锚点 → unverified，绝不判撒谎', rl.verdict === 'unverified' && rl.reason === 'no-anchor-cannot-contradict', rl)
 check('原因说清「没有锚点」', describeVerification(rl).includes('没有可用的时间锚点'), describeVerification(rl))
+
+console.log('10. 回溯：会话 cwd 是「几个仓库的父目录」时，事实该去哪问（真机 2026-09-12）')
+// 真机形状：会话 cwd = D:\dsh_dev（不是仓库），声明 dsh-chatroom/lib/rooms.js。
+// 那时 `git -C cwd` 直接 not a git repository —— 插件自己刚建了仓，声明照样只能判未证实。
+const parent = path.join(root, 'parent')       // 不是仓库
+const plug = path.join(parent, 'plugin')       // 是仓库
+await fs.mkdir(plug, { recursive: true })
+await git(plug, ['init', '-q', '-b', 'main'])
+await git(plug, ['config', 'user.email', 'test@example.com'])
+await git(plug, ['config', 'user.name', 'test'])
+await fs.writeFile(path.join(plug, 'app.py'), 'def f():\n    return 1\n', 'utf8')
+await git(plug, ['add', 'app.py'])
+await git(plug, ['commit', '-q', '-m', 'init'])
+
+let w = await resolveWorktree({ workspace: parent, files: ['plugin/app.py'] })
+check('cwd 不是仓库 → 回溯到声明文件所属仓库', w.fallback === true && w.workspace === plug, w)
+check('  声明路径改写成仓库内相对路径', w.files.join() === 'app.py', w.files)
+check('  原因写明是会话工作区不在 git 里', w.reason === 'session-workspace-not-a-worktree', w.reason)
+
+// 端到端：回溯前判不出来，回溯后拿得到事实
+const beforeFallback = await verifyDeclaration({ workspace: parent, files: ['plugin/app.py'] })
+check('回溯前：未证实（不在 git 仓库内）',
+  beforeFallback.verdict === 'unverified' && beforeFallback.reason === 'not-a-git-worktree', beforeFallback)
+await fs.writeFile(path.join(plug, 'app.py'), 'def f():\n    return 42\n', 'utf8')
+const afterFallback = await verifyDeclaration({ workspace: w.workspace, files: w.files })
+check('回溯后：拿得到事实 → 已证实', afterFallback.verdict === 'verified', afterFallback)
+const described = describeVerification({ ...afterFallback, workspaceUsed: w.workspace, repoFallback: true })
+check('  描述里写明「git 事实取自哪个仓库」', described.includes('git 事实取自') && described.includes('按声明文件定位'), described)
+check('  没回溯就不加这句（不制造无谓的噪音）',
+  !describeVerification(afterFallback).includes('git 事实取自'), describeVerification(afterFallback))
+
+// 反例 1：cwd 自己就是仓库 → 原样返回，绝不改写路径
+w = await resolveWorktree({ workspace: plug, files: ['app.py'] })
+check('cwd 本身是仓库 → 不做回溯、路径原样', w.fallback === false && w.files.join() === 'app.py', w)
+
+// 反例 2：声明横跨两个仓库 → 整份放弃（宁可判未证实，不拼两个仓库的结论）
+const plug2 = path.join(parent, 'plugin2')
+await fs.mkdir(plug2, { recursive: true })
+await git(plug2, ['init', '-q', '-b', 'main'])
+await git(plug2, ['config', 'user.email', 'test@example.com'])
+await git(plug2, ['config', 'user.name', 'test'])
+await fs.writeFile(path.join(plug2, 'b.py'), 'z = 1\n', 'utf8')
+await git(plug2, ['add', 'b.py'])
+await git(plug2, ['commit', '-q', '-m', 'init'])
+w = await resolveWorktree({ workspace: parent, files: ['plugin/app.py', 'plugin2/b.py'] })
+check('声明跨两个仓库 → 不回溯（宁可少判）', w.fallback === false && w.workspace === parent, w)
+
+// 反例 3：哪一层都不是仓库 → 老实说找不到，仍是未证实
+const nowhere = path.join(root, 'nowhere')
+await fs.mkdir(nowhere, { recursive: true })
+w = await resolveWorktree({ workspace: nowhere, files: ['a.py'] })
+check('哪儿都不是仓库 → fallback=false', w.fallback === false && w.reason === 'no-worktree-found', w)
+const rn = await verifyDeclaration({ workspace: w.workspace, files: w.files })
+check('  结论仍是未证实（查不到 ≠ 撒谎）', rn.verdict === 'unverified', rn)
+check('  但理由说清「两边都找过了」', describeVerification({ ...rn, reason: 'no-worktree-found' }).includes('都不是 git 工作区'),
+  describeVerification({ ...rn, reason: 'no-worktree-found' }))
 
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
