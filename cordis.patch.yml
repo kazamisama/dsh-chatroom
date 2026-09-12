@@ -1,0 +1,6 @@
+# dsh-chatroom bundle patch: 把插件的公开 dsh.client 入口插入 web 插件名册。
+# 与 dsh-raw-html 同构：本插件同时提供 Host 半侧（房间注册表/变更登记/投递引擎）
+# 与浏览器半侧（房间面板）。
+- insert:
+    - id: dsh-chatroom
+      name: 'dsh-chatroom'
