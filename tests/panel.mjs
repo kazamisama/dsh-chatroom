@@ -42,6 +42,8 @@ const NAMES = [
   'renderBlocked',
   // 邀请选择器的工作区筛选与排序（2026-09-12 反馈）
   'workspaceBuckets', 'filterCandidates', 'sortCandidates',
+  // 用户侧未读与滚动锚（2026-09-14 反馈：发消息时滚动条复位）
+  'unreadOf', 'scrollAnchorOf', 'applyScrollAnchor',
 ]
 const missing = NAMES.filter((n) => extractFunction(src, n) === null)
 if (missing.length > 0) {
@@ -230,6 +232,54 @@ check('缺 lastActivityAt 的条目按 createdAt 参与排序（c 落在中位�
 check('未知排序键退回默认（不炸）', ids(api.sortCandidates(sortRows, 'nope')) === 'bca')
 check('不改动传入的数组', sortRows.map((r) => r.sessionId).join('') === 'abc')
 check('空输入不炸', api.sortCandidates(undefined, 'activity-desc').length === 0)
+
+console.log('11. 用户侧未读 + 滚动锚 —— 「发消息时滚动条复位」的回归（真机反馈 2026-09-14）')
+const msgs = [{ seq: 5 }, { seq: 6 }, { seq: 7 }, { seq: 8 }]
+check('游标 5 → 未读 6/7/8', api.unreadOf(msgs, 5).map((m) => m.seq).join() === '6,7,8',
+  api.unreadOf(msgs, 5).map((m) => m.seq))
+check('游标停在最新 → 没有未读', api.unreadOf(msgs, 8).length === 0)
+check('没有游标 → 全算未读', api.unreadOf(msgs, 0).length === 4)
+check('空/坏输入不炸', api.unreadOf(undefined, undefined).length === 0 && api.unreadOf([{}, null], 0).length === 0)
+
+check('贴着底部 → 跟随最新（stick）',
+  api.scrollAnchorOf({ scrollTop: 900, scrollHeight: 1000, clientHeight: 100 }).stick === true)
+check('翻上去看历史 → 不 stick，且记下原位置',
+  api.scrollAnchorOf({ scrollTop: 100, scrollHeight: 3000, clientHeight: 400 }).stick === false &&
+  api.scrollAnchorOf({ scrollTop: 100, scrollHeight: 3000, clientHeight: 400 }).top === 100)
+check('差 20px 仍算底部（容差内不跟人较劲）',
+  api.scrollAnchorOf({ scrollTop: 880, scrollHeight: 1000, clientHeight: 100 }).stick === true)
+check('没有节点时不炸（stick 兜底）', api.scrollAnchorOf(null).stick === true)
+
+const node = { scrollTop: 0, scrollHeight: 5000, clientHeight: 400 }
+api.applyScrollAnchor(node, { top: 123, stick: false })
+check('恢复：不 stick 就用记下的位置', node.scrollTop === 123, node.scrollTop)
+api.applyScrollAnchor(node, { top: 123, stick: true })
+check('恢复：stick 就直接到底', node.scrollTop === 5000, node.scrollTop)
+check('空节点不炸', (api.applyScrollAnchor(null, { top: 1, stick: true }), true))
+
+// **这两条才是回归钉**：挂树前赋值一律被夹成 0 —— 那就是"复位"本身。
+const swapSrc = extractFunction(src, 'swap')
+check('swap：先量锚点，再 replaceWith，最后恢复',
+  swapSrc !== null &&
+  swapSrc.indexOf('scrollAnchorOf(old)') < swapSrc.indexOf('old.replaceWith(panel)') &&
+  swapSrc.indexOf('applyScrollAnchor(panel, anchor)') > swapSrc.indexOf('old.replaceWith(panel)'),
+  swapSrc)
+check('  旧写法（把旧节点的 scrollTop 直接赋给新节点）不许回来',
+  !/panel\.scrollTop\s*=\s*old\.scrollTop/.test(src))
+check('  挂树之后要跑渲染期接线（未读游标能量出高度才敢推进）',
+  swapSrc !== null && swapSrc.indexOf('panel._afterMount()') > swapSrc.indexOf('old.replaceWith(panel)'))
+
+const buildSrc = extractFunction(src, 'buildRoom')
+check('buildRoom：接线登记成回调，而不是当场执行',
+  buildSrc !== null && buildSrc.indexOf('panel._afterMount = function') > 0)
+check('  未读计数用**全部消息**（不是那 40 条切片）',
+  buildSrc !== null && buildSrc.includes('unreadOf(room.messages, readSeq)'))
+check('  「跳到最新」按钮在场且用 sticky 钉底',
+  buildSrc !== null && buildSrc.includes('position:sticky') && buildSrc.includes('跳到最新'))
+check('  未读分界文案在场', buildSrc !== null && buildSrc.includes('条未读'))
+const viewSrc = extractFunction(src, 'makeRoomView')
+check('副页（React 座位）重建也保住滚动位置',
+  viewSrc !== null && viewSrc.includes('applyScrollAnchor(host, anchor)'))
 
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
