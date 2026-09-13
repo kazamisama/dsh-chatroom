@@ -266,6 +266,45 @@ check('别人点作者 → 作者照常欠回执',
   store.obligors(room.id, mOther.seq).map((m) => m.sessionId).includes(A),
   store.obligors(room.id, mOther.seq).map((m) => shortId(m.sessionId)))
 
+console.log('18. 并发写盘不许互相踩（真机 #653 / #661 报的：同一批次并发发两条房间消息）')
+// 旧实现：所有写入共用 rooms.json.tmp —— 并发时先到的 rename 会把**别人写进 tmp 的内容**
+// 当成自己的提交（"抛错但其实写进去了"），被覆盖的那次连内容一起丢（"抛错且真丢了"）。
+const root2 = path.join(os.tmpdir(), 'dsh-chatroom-concurrent-' + Date.now())
+const store2 = createChatroomStore({ root: root2 })
+await store2.load()
+const room2 = await store2.createRoom({ name: '并发写' })
+await store2.join(room2.id, A, { roleName: '实现者' })
+const N18 = 12
+const settled = await Promise.allSettled(
+  Array.from({ length: N18 }, (_, i) => store2.appendMessage({
+    roomId: room2.id, sender: { sessionId: A, roleName: '实现者' }, kind: 'free', body: '并发 ' + i,
+  })),
+)
+check('并发 ' + N18 + ' 条 append 全部成功（无 ENOENT）',
+  settled.every((r) => r.status === 'fulfilled'),
+  settled.filter((r) => r.status === 'rejected').map((r) => String(r.reason && r.reason.message)))
+const onDisk = JSON.parse(await fs.readFile(path.join(root2, 'rooms.json'), 'utf8'))
+const persisted = onDisk.messages.filter((m) => m.roomId === room2.id)
+check('  盘上每一条都在（不丢条）', persisted.length === N18, persisted.length)
+check('  盘上 seq 连续无重复', new Set(persisted.map((m) => m.seq)).size === N18,
+  persisted.map((m) => m.seq).sort((x, y) => x - y))
+check('  没留下 tmp 垃圾', (await fs.readdir(root2)).filter((f) => f.endsWith('.tmp')).length === 0,
+  await fs.readdir(root2))
+check('  写成功就不该报"状态文件出问题"', store2.stateError() === null, store2.stateError())
+
+// 读盘损坏：不再静默退回空状态（那等于整份房间记录无声清零）
+const root3 = path.join(os.tmpdir(), 'dsh-chatroom-corrupt-' + Date.now())
+await fs.mkdir(root3, { recursive: true })
+await fs.writeFile(path.join(root3, 'rooms.json'), '{"rooms": [{"id": "room-x"', 'utf8') // 半截 JSON
+const store3 = createChatroomStore({ root: root3 })
+await store3.load()
+check('  损坏文件 → 以空状态启动，但**留下原文**',
+  (await fs.readdir(root3)).some((f) => f.includes('corrupt-')), await fs.readdir(root3))
+check('  并且这件事被记下来（room_status 会说出来）',
+  typeof store3.stateError() === 'string' && store3.stateError().includes('读不出来'), store3.stateError())
+await fs.rm(root3, { recursive: true, force: true })
+await fs.rm(root2, { recursive: true, force: true })
+
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
