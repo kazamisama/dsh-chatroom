@@ -206,6 +206,49 @@ check('  结论仍是未证实（查不到 ≠ 撒谎）', rn.verdict === 'unver
 check('  但理由说清「两边都找过了」', describeVerification({ ...rn, reason: 'no-worktree-found' }).includes('都不是 git 工作区'),
   describeVerification({ ...rn, reason: 'no-worktree-found' }))
 
+console.log('11. ref 无效不许静默退回（真机 #623 报的：随便写个 ref 也拿到了「已证实」）')
+// 真机形状：声明里给了 ref，而那个 hash 在仓库里**根本不存在**；核验却退回
+// 「文件覆盖 + 会话时间」那条路判成「已证实」—— 于是 ref 只是个装饰。
+await fs.writeFile(path.join(repo, 'refcheck.py'), 'r = 1\n', 'utf8') // 未跟踪 → 文件层面有证据
+const ghost11 = '0123456789abcdef0123456789abcdef01234567'
+let r11 = await verifyDeclaration({ workspace: repo, files: ['refcheck.py'], ref: ghost11 })
+check('仓库里没有的 ref → 与事实不符（不是"退回文件覆盖"）', r11.verdict === 'contradicted', r11)
+check('  理由点名 ref 无效', r11.reason === 'ref-not-found', r11.reason)
+check('  refState 落在结论里', r11.refState === 'not-found', r11.refState)
+const d11 = describeVerification(r11)
+check('  描述说清是 ref 的问题、并点名是哪个 ref', d11.includes('ref 无效') && d11.includes(ghost11), d11)
+check('  给了改法', d11.includes('重新声明'), d11)
+check('  文件层面的证据照样报出来（不是"你的文件没动"）', d11.includes('有未提交改动'), d11)
+
+// 解析得到、但不是 commit（指到了 tree）→ 判不出来，不判撒谎
+r11 = await verifyDeclaration({ workspace: repo, files: ['refcheck.py'], ref: 'HEAD^{tree}' })
+check('ref 指向 tree → 未证实（不判撒谎）', r11.verdict === 'unverified' && r11.reason === 'ref-not-a-commit', r11)
+check('  描述点出解析到的是什么', describeVerification(r11).includes('tree'), describeVerification(r11))
+check('  仍不退回文件覆盖：文件明明有证据也没判已证实', r11.files[0].dirty === true && r11.verdict !== 'verified', r11.files[0])
+
+// 存在、但不是 HEAD 的祖先（在别的分支上）
+await git(repo, ['checkout', '-q', '-b', 'side-branch'])
+await fs.writeFile(path.join(repo, 'side.py'), 's = 1\n', 'utf8')
+await git(repo, ['add', 'side.py'])
+await git(repo, ['commit', '-q', '-m', 'side work'])
+const sideHead11 = (await git(repo, ['rev-parse', 'HEAD'])).trim()
+await git(repo, ['checkout', '-q', 'main'])
+r11 = await verifyDeclaration({ workspace: repo, files: ['refcheck.py'], ref: sideHead11 })
+check('ref 不是 HEAD 的祖先 → 未证实', r11.verdict === 'unverified' && r11.reason === 'ref-not-ancestor', r11)
+check('  描述说清"可能在别的分支"', describeVerification(r11).includes('别的分支'), describeVerification(r11))
+
+// 反向对照 1：有效 ref 覆盖该文件 → 照旧已证实
+await git(repo, ['add', 'refcheck.py'])
+await git(repo, ['commit', '-q', '-m', 'refcheck'])
+const goodHead11 = (await git(repo, ['rev-parse', 'HEAD'])).trim()
+r11 = await verifyDeclaration({ workspace: repo, files: ['refcheck.py'], ref: goodHead11 })
+check('有效 ref 覆盖该文件 → 已证实（refState=ok）',
+  r11.verdict === 'verified' && r11.refState === 'ok' && r11.files[0].refCovers === true, r11)
+
+// 反向对照 2：没给 ref → 分层证据那条路完全不受影响
+r11 = await verifyDeclaration({ workspace: repo, files: ['refcheck.py'], anchorMs: Date.now() - 60000, anchorLabel: '本次会话开始' })
+check('没给 ref → 照旧走分层证据', r11.verdict === 'verified' && r11.refState === null, r11)
+
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
