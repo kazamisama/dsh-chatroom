@@ -350,7 +350,8 @@ console.log('16. 主线程停摆探针（真机 2026-09-14：界面侧间歇卡�
 check('探针记录停摆时长与时刻', src.includes('jankWorstMs = drift') && src.includes("clientLog('主线程停摆 '"))
 check('  只报 ≥600ms 的停摆（普通抖动不算）', src.includes('if (drift >= 600)'))
 check('  只认最近 5 分钟的（避免旧记录一直挂着）', src.includes('Date.now() - jankWorstAt < 5 * 60 * 1000'))
-check('  面板头部挂「⚠ 界面卡 X.Xs」', src.includes("'⚠ 界面卡 '"))
+check('  停摆进了自诊断那条（⚠ 里的一项）',
+  src.includes("diagBits.push('停摆 ' + (jank / 1000).toFixed(1) + 's')"))
 check('  启动一次（apply 里，且有重入保护）',
   src.includes('if (jankProbeOn) return') && src.includes('startJankProbe()'))
 check('  由 createPanel 读它（面板一开就能看到）',
