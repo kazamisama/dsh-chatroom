@@ -261,8 +261,8 @@ check('空节点不炸', (api.applyScrollAnchor(null, { top: 1, stick: true }), 
 const swapSrc = extractFunction(src, 'swap')
 check('swap：先量锚点，再 replaceWith，最后恢复',
   swapSrc !== null &&
-  swapSrc.indexOf('scrollAnchorOf(old)') < swapSrc.indexOf('old.replaceWith(panel)') &&
-  swapSrc.indexOf('applyScrollAnchor(panel, anchor)') > swapSrc.indexOf('old.replaceWith(panel)'),
+  swapSrc.indexOf('scrollAnchorOf(old._content || old)') < swapSrc.indexOf('old.replaceWith(panel)') &&
+  swapSrc.indexOf('applyScrollAnchor(panel._content || panel, anchor)') > swapSrc.indexOf('old.replaceWith(panel)'),
   swapSrc)
 check('  旧写法（把旧节点的 scrollTop 直接赋给新节点）不许回来',
   !/panel\.scrollTop\s*=\s*old\.scrollTop/.test(src))
@@ -270,8 +270,9 @@ check('  挂树之后要跑渲染期接线（未读游标能量出高度才敢�
   swapSrc !== null && swapSrc.indexOf('panel._afterMount()') > swapSrc.indexOf('old.replaceWith(panel)'))
 
 const buildSrc = extractFunction(src, 'buildRoom')
-check('buildRoom：接线登记成回调，而不是当场执行',
-  buildSrc !== null && buildSrc.indexOf('panel._afterMount = function') > 0)
+check('buildRoom：接线登记成回调（挂在**壳**上，不是内容区），而不是当场执行',
+  buildSrc !== null && buildSrc.indexOf('shell._afterMount = function') > 0 &&
+  buildSrc.indexOf("content.addEventListener('scroll', update)") > 0)
 check('  未读计数用**全部消息**（不是那 40 条切片）',
   buildSrc !== null && buildSrc.includes('unreadOf(room.messages, readSeq)'))
 check('  「跳到最新」按钮在场且用 sticky 钉底',
@@ -280,6 +281,41 @@ check('  未读分界文案在场', buildSrc !== null && buildSrc.includes('条�
 const viewSrc = extractFunction(src, 'makeRoomView')
 check('副页（React 座位）重建也保住滚动位置',
   viewSrc !== null && viewSrc.includes('applyScrollAnchor(host, anchor)'))
+
+console.log('12. 侧面抽屉 + 头部固定（真机反馈 2026-09-14：信息和聊天混在一起、滚下去抓不住窗口）')
+check('面板壳不再自己滚（flex 列：头部固定、内容区自己滚）',
+  src.includes('resize:both;overflow:hidden;display:flex;flex-direction:column;'))
+check('  头部是壳的固定子节点（不是滚动内容的一部分）',
+  src.includes("var head = el('div', S.head)") && src.includes('panel.appendChild(head)'))
+check('  内容区单独登记成滚动容器', src.includes('panel._content = body'))
+check('  抽屉登记成壳的子节点', src.includes('panel._drawer = drawer'))
+check('  抽屉默认收起', src.includes('applyDrawer(panel, false)'))
+check('  抽屉开合只改 transform/visibility（不重渲染）',
+  src.includes("drawer.style.transform = isOpen ? 'translateX(0)'") && src.includes('drawer.style.visibility ='))
+check('  抽屉状态跟着节点过重渲染（否则每 2 秒被弹回去）',
+  src.includes('panel._drawerOpen = old._drawerOpen === true'))
+check('buildRoom：成员/邀请路由进抽屉，聊天流进内容区',
+  buildSrc !== null && buildSrc.includes('if (drawer !== null) panel = drawer') &&
+  buildSrc.includes('panel = content') && buildSrc.includes('var content = panel._content || panel'))
+check('  副页（没有抽屉）全部照旧落在 host 上',
+  buildSrc !== null && buildSrc.includes('var drawer = panel._drawer || null'))
+
+console.log('13. 「按钮按不了」的两个真根因（真机反馈 2026-09-14）')
+// 根因一：加入失败被静默吞掉 —— store.join 满员时会抛，而处理器不看 ok
+check('加入会话：失败要弹出来，不许静默',
+  buildSrc !== null && buildSrc.includes("reportFailure('加入会话', res)"))
+check('  移出/重新启用成员同理', buildSrc !== null && buildSrc.includes('reportFailure(m.inRoom ?'))
+check('  新建房间同理', src.includes("reportFailure('新建房间', res)"))
+check('  人的发言失败**不清空草稿**（那句话还在人手里）',
+  buildSrc !== null && buildSrc.includes("reportFailure('发送', res)"))
+const reportSrc = extractFunction(src, 'reportFailure')
+check('reportFailure 把服务端的 message 带出来',
+  reportSrc !== null && reportSrc.includes('res.error.message'))
+// 根因二：卡住的 composing 会把所有重画挡掉
+check('composing 自愈：组字元素离开文档即解除冻结',
+  src.includes('!document.contains(composingEl)'))
+check('  记录组字中的元素', src.includes('composingEl = e.target || null'))
+check('  compositionend 清掉它', src.includes('composingEl = null'))
 
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
