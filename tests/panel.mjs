@@ -372,8 +372,14 @@ check('  让路判断在后台判断之后、组字判断之前',
   refreshSrc !== null &&
   refreshSrc.indexOf('if (document.hidden === true) return') < refreshSrc.indexOf('if (userIsTyping()) return') &&
   refreshSrc.indexOf('if (userIsTyping()) return') < refreshSrc.indexOf('renderBlocked(dragging, composing)'))
-check('  失焦后补一次（不让面板停在旧画面）',
-  src.includes("document.addEventListener('focusout', function () {") && src.includes('if (!userIsTyping()) reload()'))
+check('失焦不再触发重画（那次实现可能自激：重绘换节点 → focusout → 重绘…）',
+  !src.includes("document.addEventListener('focusout', function () {"))
+check('重绘节流：400ms 内不重复重建（切断任何"重绘触发重绘"的环）',
+  src.includes('lastRenderAt !== 0 && diagT0 - lastRenderAt < 400'))
+check('重绘频率计数器（一分钟窗口）',
+  src.includes('function renderRate()') && src.includes('renderTimes.push(now)'))
+check('  头部只在 >20 次/分 时显示（正常是每分钟十几次）',
+  src.includes("if (rate > 20) diagBits.push('重绘 ' + rate + '次/分')"))
 
 console.log('18. 自诊断三计数器（间歇症状不能靠单次 A/B 定性）')
 check('三个数各有取样与读取', src.includes('function noteDiag(') && src.includes('function recentMax(') &&
