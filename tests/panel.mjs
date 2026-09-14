@@ -317,6 +317,24 @@ check('composing 自愈：组字元素离开文档即解除冻结',
 check('  记录组字中的元素', src.includes('composingEl = e.target || null'))
 check('  compositionend 清掉它', src.includes('composingEl = null'))
 
+console.log('14. 轮询收敛（真机反馈 2026-09-14：会话内发消息要等近 10 秒 —— 自己的footprint先收干净）')
+const refreshSrc = extractFunction(src, 'refresh')
+check('面板：页面在后台就不轮询', refreshSrc !== null && refreshSrc.includes('if (document.hidden === true) return'))
+check('  自愈那一行在后台判断**之前**（冻结不能因为切后台就永远修不回来）',
+  refreshSrc !== null &&
+  refreshSrc.indexOf('!document.contains(composingEl)') < refreshSrc.indexOf('if (document.hidden === true) return'))
+check('候选不再每 2 秒拉：抽屉开着 / 邀请展开 / 还没有过一份 才拉',
+  refreshSrc !== null && refreshSrc.includes('var wantsCandidates = lastCandidates === null') &&
+  refreshSrc.includes('pick.open === true') && refreshSrc.includes('liveNode._drawerOpen === true'))
+check('  不需要候选时直接返回（不发出那次请求）',
+  refreshSrc !== null && refreshSrc.includes('if (!wantsCandidates) return'))
+check('入口角标轮询也跳过后台', src.includes("// 后台标签页不拉（角标只是个数，回来时补一次就够）"))
+check('  副页轮询同样', src.includes('if (document.hidden === true) return // 后台标签页不拉'))
+check('回到前台补一次', src.includes("document.addEventListener('visibilitychange', function () {") &&
+  src.includes('if (document.hidden !== true) reload()'))
+check('打开抽屉时把候选拉新（那里正是「邀请加入」的家）',
+  src.includes('if (panel._drawerOpen === true) reload()'))
+
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
 process.exit(fail === 0 ? 0 : 1)
