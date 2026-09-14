@@ -305,6 +305,42 @@ check('  并且这件事被记下来（room_status 会说出来）',
 await fs.rm(root3, { recursive: true, force: true })
 await fs.rm(root2, { recursive: true, force: true })
 
+console.log('19. 房间策略就地可改（真机反馈 2026-09-14：撞到 room is full 才知道有个上限）')
+const pRoom = await store.createRoom({ name: '策略' })
+check('默认上限 = 5', pRoom.policy.maxMembers === 5, pRoom.policy)
+let pol = await store.setPolicy(pRoom.id, { maxMembers: 3, threadBudget: 6 })
+check('设两个字段', pol.policy.maxMembers === 3 && pol.policy.threadBudget === 6, pol.policy)
+pol = await store.setPolicy(pRoom.id, { maxMembers: 2 })
+check('只设一个字段时另一个不动', pol.policy.maxMembers === 2 && pol.policy.threadBudget === 6, pol.policy)
+check('空 patch 不改动', (await store.setPolicy(pRoom.id, {})).policy.maxMembers === 2)
+await store.setPolicy(pRoom.id, { maxMembers: 3 })
+await store.join(pRoom.id, A, {})
+await store.join(pRoom.id, B, {})
+await store.join(pRoom.id, C, {})
+check('三名成员坐满上限', store.activeMembers(pRoom.id).length === 3, store.activeMembers(pRoom.id).length)
+const D19 = 'session-ddddeeee-1111-2222-3333-444455556666'
+let threw19 = null
+try { await store.join(pRoom.id, D19, {}) } catch (err) { threw19 = String(err.message) }
+check('到达上限 → 拒绝并说清上限', threw19 !== null && threw19.includes('room is full (3'), threw19)
+await store.setPolicy(pRoom.id, { maxMembers: 1 })
+check('上限降到低于当前人数：允许（不踢人）', store.activeMembers(pRoom.id).length === 3, store.activeMembers(pRoom.id).length)
+threw19 = null
+try { await store.join(pRoom.id, D19, {}) } catch (err) { threw19 = String(err.message) }
+check('  但仍加不进新人', threw19 !== null, threw19)
+for (const bad of [0, 999, 'abc', -1, 1.5]) {
+  let err19 = null
+  try { await store.setPolicy(pRoom.id, { maxMembers: bad }) } catch (err) { err19 = String(err.message) }
+  check('  非法值 ' + JSON.stringify(bad) + ' 被拒（不夹取、不静默截断）', err19 !== null && err19.includes('成员上限'), err19)
+}
+let err19b = null
+try { await store.setPolicy(pRoom.id, { threadBudget: 0 }) } catch (err) { err19b = String(err.message) }
+check('  线程预算非法值也被拒', err19b !== null && err19b.includes('线程预算'), err19b)
+const storeB = createChatroomStore({ root })
+await storeB.load()
+check('策略落盘（重开仍在）',
+  storeB.getRoom(pRoom.id).policy.maxMembers === 1 && storeB.getRoom(pRoom.id).policy.threadBudget === 6,
+  storeB.getRoom(pRoom.id).policy)
+
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')

@@ -335,6 +335,17 @@ check('回到前台补一次', src.includes("document.addEventListener('visibili
 check('打开抽屉时把候选拉新（那里正是「邀请加入」的家）',
   src.includes('if (panel._drawerOpen === true) reload()'))
 
+console.log('15. 房间策略就地可改（真机反馈 2026-09-14：撞到 room is full 才发现有个上限）')
+check('抽屉里有策略块', buildSrc !== null && buildSrc.includes("'房间策略'"))
+check('  两个数字字段（成员上限 / 线程预算）', buildSrc !== null &&
+  buildSrc.includes("numField('成员上限'") && buildSrc.includes("numField('线程预算'"))
+check('  保存走 set-policy，失败要把服务端原话带出来', buildSrc !== null &&
+  buildSrc.includes("rpc('set-policy'") && buildSrc.includes("reportFailure('改房间策略', res)"))
+check('  输入框带 data-draft（重渲染不冲掉正在输的值）',
+  buildSrc !== null && buildSrc.includes("input.setAttribute('data-draft', label)"))
+check('状态行把人数与上限一起说',
+  buildSrc !== null && buildSrc.includes("+ '/' + room.room.policy.maxMembers + ' 名成员'"))
+
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
 process.exit(fail === 0 ? 0 : 1)
