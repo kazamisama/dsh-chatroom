@@ -350,8 +350,15 @@ console.log('16. 主线程停摆探针（真机 2026-09-14：界面侧间歇卡�
 check('探针记录停摆时长与时刻', src.includes('jankWorstMs = drift') && src.includes("clientLog('主线程停摆 '"))
 check('  只报 ≥600ms 的停摆（普通抖动不算）', src.includes('if (drift >= 600)'))
 check('  只认最近 5 分钟的（避免旧记录一直挂着）', src.includes('Date.now() - jankWorstAt < 5 * 60 * 1000'))
-check('  停摆进了自诊断那条（⚠ 里的一项）',
-  src.includes("diagBits.push('停摆 ' + (jank / 1000).toFixed(1) + 's')"))
+check('  停摆进了自诊断那条（带次数与归因）',
+  src.includes("diagBits.push('停摆 ' + (jank / 1000).toFixed(1) + 's×' + jankCount") &&
+  src.includes("jankWorstMine === true ? '(重建中)' : '(非我)'"))
+check('探针：只在**前台可见**时计停摆（webview 被挂起/节流也会拖后定时器，那是假象）',
+  src.includes('if (document.hidden === true) return') && src.includes('jankCount++'))
+check('  归因：停摆时我是不是正在重建面板', src.includes('jankWorstMine = renderInFlight === true'))
+check('  重绘期间立旗（含早退路径都要放下）',
+  src.includes('renderInFlight = true') && src.includes('renderInFlight = false'))
+check('面板轮询放到 4 秒（原来 2 秒）', src.includes('window.setInterval(refresh, 4000)'))
 check('  启动一次（apply 里，且有重入保护）',
   src.includes('if (jankProbeOn) return') && src.includes('startJankProbe()'))
 check('  由 createPanel 读它（面板一开就能看到）',
