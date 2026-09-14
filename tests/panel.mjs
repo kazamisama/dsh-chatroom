@@ -367,6 +367,15 @@ check('  让路判断在后台判断之后、组字判断之前',
 check('  失焦后补一次（不让面板停在旧画面）',
   src.includes("document.addEventListener('focusout', function () {") && src.includes('if (!userIsTyping()) reload()'))
 
+console.log('18. 自诊断三计数器（间歇症状不能靠单次 A/B 定性）')
+check('三个数各有取样与读取', src.includes('function noteDiag(') && src.includes('function recentMax(') &&
+  src.includes("noteDiag('repaint'") && src.includes("noteDiag('rpc'"))
+check('  重绘：render() 自己计时（含早退路径也不至于记脏数）', src.includes('var diagT0 = performance.now()'))
+check('  rpc：量 state 的客户端往返', src.includes('var diagRpcT0 = performance.now()'))
+check('  只认最近 5 分钟', src.includes('Date.now() - 5 * 60 * 1000'))
+check('  头部只在异常时出现（重绘 ≥100ms / 拉取 ≥500ms / 停摆 ≥600ms）',
+  src.includes("if (diagRepaint >= 100)") && src.includes("if (diagRpc >= 500)") && src.includes("if (jank >= 600)"))
+
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
 process.exit(fail === 0 ? 0 : 1)
