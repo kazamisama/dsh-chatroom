@@ -356,6 +356,17 @@ check('  启动一次（apply 里，且有重入保护）',
 check('  由 createPanel 读它（面板一开就能看到）',
   src.includes('var jank = recentJankMs()'))
 
+console.log('17. 打字让路（真机 2026-09-14 用户自测：关掉聊天室窗口后延迟消失）')
+check('识别"用户正对着输入框"', src.includes('function userIsTyping()') &&
+  src.includes("tag === 'textarea' || tag === 'input'") && src.includes('el.isContentEditable === true'))
+check('  刷新时让路（打在重绘闸门之前）', refreshSrc !== null && refreshSrc.includes('if (userIsTyping()) return'))
+check('  让路判断在后台判断之后、组字判断之前',
+  refreshSrc !== null &&
+  refreshSrc.indexOf('if (document.hidden === true) return') < refreshSrc.indexOf('if (userIsTyping()) return') &&
+  refreshSrc.indexOf('if (userIsTyping()) return') < refreshSrc.indexOf('renderBlocked(dragging, composing)'))
+check('  失焦后补一次（不让面板停在旧画面）',
+  src.includes("document.addEventListener('focusout', function () {") && src.includes('if (!userIsTyping()) reload()'))
+
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
 process.exit(fail === 0 ? 0 : 1)
