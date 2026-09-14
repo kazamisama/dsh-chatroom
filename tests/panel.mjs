@@ -346,6 +346,16 @@ check('  输入框带 data-draft（重渲染不冲掉正在输的值）',
 check('状态行把人数与上限一起说',
   buildSrc !== null && buildSrc.includes("+ '/' + room.room.policy.maxMembers + ' 名成员'"))
 
+console.log('16. 主线程停摆探针（真机 2026-09-14：界面侧间歇卡顿，而服务端 4-49ms、整机 12-36% 都健康）')
+check('探针记录停摆时长与时刻', src.includes('jankWorstMs = drift') && src.includes("clientLog('主线程停摆 '"))
+check('  只报 ≥600ms 的停摆（普通抖动不算）', src.includes('if (drift >= 600)'))
+check('  只认最近 5 分钟的（避免旧记录一直挂着）', src.includes('Date.now() - jankWorstAt < 5 * 60 * 1000'))
+check('  面板头部挂「⚠ 界面卡 X.Xs」', src.includes("'⚠ 界面卡 '"))
+check('  启动一次（apply 里，且有重入保护）',
+  src.includes('if (jankProbeOn) return') && src.includes('startJankProbe()'))
+check('  由 createPanel 读它（面板一开就能看到）',
+  src.includes('var jank = recentJankMs()'))
+
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
 process.exit(fail === 0 ? 0 : 1)
