@@ -341,6 +341,65 @@ check('策略落盘（重开仍在）',
   storeB.getRoom(pRoom.id).policy.maxMembers === 1 && storeB.getRoom(pRoom.id).policy.threadBudget === 6,
   storeB.getRoom(pRoom.id).policy)
 
+console.log('20. 「欠的是哪一条」—— 义务会积压，靶子只报最新那条（真机 #1348 / #1279 / #1268）')
+// 场景就是真机里发生的那一幕：人的发言让全体欠回执 → 有人回了 → 之后一条只 @ 了**别人**的消息
+// 把靶子挪走。旧的 status 只说「谁欠靶子」，于是「谁还欠着 #h1」在面板与 room_status 里
+// 同时消失，两个人只能各自推理「已读停在 N」算不算 N。
+const root4 = path.join(os.tmpdir(), 'dsh-chatroom-owed-' + Date.now())
+let fakeNow = Date.now()
+const s4 = createChatroomStore({ root: root4, now: () => fakeNow })
+await s4.load()
+const r4 = await s4.createRoom({ name: '欠哪一条' })
+const P = 'session-4025aaaa-1111-2222-3333-444455556666'
+const Q = 'session-39f9bbbb-1111-2222-3333-444455556666'
+await s4.join(r4.id, P, { roleName: '前端' })
+await s4.join(r4.id, Q, { roleName: '审计' })
+const h1 = await s4.appendMessage({ roomId: r4.id, sender: { user: true }, kind: 'human', body: '这条全体都得回' })
+check('人发言 → 两人都欠', s4.obligors(r4.id, h1.seq).length === 2, s4.obligors(r4.id, h1.seq).length)
+await s4.judge({ roomId: r4.id, seq: h1.seq, sessionId: Q, verdict: 'catch-up' })
+const m20 = await s4.appendMessage({
+  roomId: r4.id, sender: { sessionId: P, roleName: '前端' }, kind: 'free',
+  body: '只问 @39f9bbbb', mentions: [Q],
+})
+const st4 = s4.status(r4.id)
+check('靶子 = 最新那条产生义务的消息', st4.targetSeq === m20.seq, st4.targetSeq)
+const pRow = st4.members.find((m) => m.shortId === '4025aaaa')
+const qRow = st4.members.find((m) => m.shortId === '39f9bbbb')
+check('P 的欠账里带着 seq（旧的 h1）', pRow.owedSeqs.join() === String(h1.seq), pRow.owedSeqs)
+check('  P 在靶子上不欠 → owed=false（旧行为），但欠账没被吞掉',
+  pRow.owed === false && pRow.owedSeqs.length === 1, { owed: pRow.owed, seqs: pRow.owedSeqs })
+check('Q 欠的是靶子那条', qRow.owedSeqs.join() === String(m20.seq) && qRow.owed === true, qRow.owedSeqs)
+check('pending 仍是「靶子上还欠谁」（投递层与旧面板的既有语义，不许变）',
+  st4.pending.length === 1 && st4.pending[0] === Q, st4.pending.map(shortId))
+check('pendingDetail 把 seq 一起带上（面板与 room_status 用它说「欠哪条」）',
+  st4.pendingDetail.length === 2
+  && st4.pendingDetail.find((d) => d.shortId === '4025aaaa').seqs.join() === String(h1.seq)
+  && st4.pendingDetail.find((d) => d.shortId === '39f9bbbb').seqs.join() === String(m20.seq),
+  st4.pendingDetail)
+check('owedSeqs(房间) 给 Map，owedSeqs(房间, 人) 给数组',
+  s4.owedSeqs(r4.id).get(P).join() === String(h1.seq) && s4.owedSeqs(r4.id, Q).join() === String(m20.seq),
+  [...s4.owedSeqs(r4.id)].map(([id, s]) => shortId(id) + ':' + s.join()))
+check('openObligations 只列还欠的那些（顺序 = seq 升序）',
+  s4.openObligations(r4.id).map((o) => o.seq).join() === [h1.seq, m20.seq].join(),
+  s4.openObligations(r4.id).map((o) => o.seq))
+// 逾时判据跟着放宽：欠着很久以前那条、而靶子很新的时候，旧实现显示「未逾时」——
+// 那正是 #1348 里查不出来的那种（欠着，却看不出欠）。
+fakeNow += 2 * 3600000
+const st4b = s4.status(r4.id)
+check('  旧账也会被标逾时（旧判据只看靶子，会漏）',
+  st4b.members.find((m) => m.shortId === '4025aaaa').overdue === true,
+  st4b.members.find((m) => m.shortId === '4025aaaa'))
+check('  逾时的具体 seq 一并给出来（供面板/工具说清是「哪一条」逾时）',
+  st4b.members.find((m) => m.shortId === '4025aaaa').overdueSeqs.join() === String(h1.seq),
+  st4b.members.find((m) => m.shortId === '4025aaaa').overdueSeqs)
+await s4.judge({ roomId: r4.id, seq: h1.seq, sessionId: P, verdict: 'unaffected' })
+check('补了旧账 → 它从欠账里消失', s4.owedSeqs(r4.id, P).length === 0, s4.owedSeqs(r4.id, P))
+await s4.setEnabled(r4.id, Q, false)
+check('被用户关掉的成员不参与（欠账里也不该有它）',
+  s4.owedSeqs(r4.id, Q).length === 0 && s4.openObligations(r4.id).length === 0,
+  s4.openObligations(r4.id).map((o) => shortId(o.sessionId) + '@' + o.seq))
+await fs.rm(root4, { recursive: true, force: true })
+
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')

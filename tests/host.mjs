@@ -134,8 +134,8 @@ const callsOf = (agent) => agent.calls
 
 console.log('1. 注册面')
 check('导出 name/inject', name === 'dsh-chatroom' && inject[0] === 'tools', { name, inject })
-check('注册了 6 个工具', registered.length === 6, registered.map((t) => t.name))
-for (const n of ['room_status', 'room_say', 'room_judge', 'room_declare_change', 'room_alert', 'room_intent']) {
+check('注册了 7 个工具', registered.length === 7, registered.map((t) => t.name))
+for (const n of ['room_status', 'room_message', 'room_say', 'room_judge', 'room_declare_change', 'room_alert', 'room_intent']) {
   check('工具存在: ' + n, tool(n) !== undefined)
   check('  ' + n + ' 有 output.render', typeof tool(n).output.render === 'function')
 }
@@ -326,6 +326,49 @@ check('  自己也没收到 followup', callsOf(A).slice(aBeforeSelf).every((c) =
 const statusText = await tool('room_status').execute({ room: roomId }, exec(A))
 check('room_status 能读到房间', statusText.text.includes('变更同步'), statusText.text.slice(0, 120))
 check('room_status 标出未表态者', statusText.text.length > 0)
+
+console.log('8.5 「欠的是哪一条」与「他当时回了什么」（真机 #1348 / #1349）')
+// 起因（真机）：6126bf05 想知道 d8e86630 对 #1295 回了什么 —— 回执正文不在它的上下文里，
+// room_status 也只说「欠一次表态」而不说是哪一条，于是"一次查询"变成了"再打扰一次"。
+const asked = await tool('room_say').execute({ room: mroomId, text: '@1b68df32 请把 #1295 的回执再贴一次' }, exec(A))
+const askedSeq = asked.seq
+const stAsk = await tool('room_status').execute({ room: mroomId }, exec(A))
+check('room_status 说清欠的是哪一条', stAsk.text.includes('欠一次表态 #' + askedSeq), stAsk.text)
+check('  待表态一行也带 seq 与靶子',
+  stAsk.text.includes('待表态（靶子 #' + askedSeq + '）') && stAsk.text.includes('1b68df32'), stAsk.text)
+const judgeReply = await tool('room_judge').execute(
+  { room: mroomId, seq: askedSeq, verdict: 'catch-up', note: '我接 API 半' }, exec(B))
+check('B 表态成功', judgeReply.ok === true, judgeReply)
+const readBack = await tool('room_message').execute({ room: mroomId, seq: askedSeq }, exec(A))
+check('room_message 取回正文', readBack.text.includes('请把 #1295 的回执再贴一次'), readBack.text.slice(0, 240))
+check('  带上被 @ 的人', readBack.text.includes('@ 到') && readBack.text.includes('1b68df32'), readBack.text.slice(0, 240))
+// 这一段就是「不用再问一次」的那半：verdict 与 note 正文都在里面
+check('  带出回执正文（verdict + note）',
+  readBack.text.includes('catch-up') && readBack.text.includes('我接 API 半'), readBack.text)
+check('  回执齐了就明说齐了', readBack.text.includes('还欠: （无'), readBack.text)
+check('  seq 对不上时说清范围，不给一段空话',
+  (await tool('room_message').execute({ room: mroomId, seq: 999999 }, exec(A))).text.includes('没有 #999999'),
+  (await tool('room_message').execute({ room: mroomId, seq: 999999 }, exec(A))).text)
+// 非法值拒绝而不是夹取（与 set-policy 同一套口径）：静默改数会让调用方以为查的是别的条
+check('  seq 非整数 → 拒绝',
+  (await tool('room_message').execute({ room: mroomId, seq: 'abc' }, exec(A))).text.includes('必须是整数'),
+  (await tool('room_message').execute({ room: mroomId, seq: 'abc' }, exec(A))).text)
+check('  limit 非整数 → 拒绝',
+  (await tool('room_message').execute({ room: mroomId, limit: 0 }, exec(A))).text.includes('limit 必须是'),
+  (await tool('room_message').execute({ room: mroomId, limit: 0 }, exec(A))).text)
+check('  since_seq 非整数 → 拒绝',
+  (await tool('room_message').execute({ room: mroomId, since_seq: 1.5 }, exec(A))).text.includes('since_seq 必须是'),
+  (await tool('room_message').execute({ room: mroomId, since_seq: 1.5 }, exec(A))).text)
+const listed = await tool('room_message').execute({ room: mroomId, limit: 4 }, exec(A))
+check('不给 seq → 列表模式（一行一条，用来先找 seq）',
+  listed.text.includes('#' + askedSeq) && listed.text.split('\n').length >= 5, listed.text)
+const older = await tool('room_message').execute({ room: mroomId, since_seq: askedSeq - 1, limit: 2 }, exec(A))
+check('since_seq 从某条之后往前读', older.text.includes('：#' + askedSeq + '–'), older.text)
+// 回执被改过也读得回来（表态是幂等的覆盖，不是追加）
+await tool('room_judge').execute({ room: mroomId, seq: askedSeq, verdict: 'retest', note: '我要重跑' }, exec(B))
+const reread = await tool('room_message').execute({ room: mroomId, seq: askedSeq }, exec(A))
+check('  改过的回执读回来是新的那份（旧的不会被当成两条）',
+  reread.text.includes('我要重跑') && !reread.text.includes('我接 API 半'), reread.text)
 
 console.log('9. 非法输入被拒绝')
 const bad = await rpc('judge', { roomId, seq: 1, sessionId: A.id, verdict: '随便' })

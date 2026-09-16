@@ -44,6 +44,8 @@ const NAMES = [
   'workspaceBuckets', 'filterCandidates', 'sortCandidates',
   // 用户侧未读与滚动锚（2026-09-14 反馈：发消息时滚动条复位）
   'unreadOf', 'scrollAnchorOf', 'applyScrollAnchor',
+  // 「欠的是哪一条」（2026-09-14 真机 #1348：靶子只报最新那条，义务却会积压）
+  'owedLabel', 'pendingRows',
 ]
 const missing = NAMES.filter((n) => extractFunction(src, n) === null)
 if (missing.length > 0) {
@@ -389,6 +391,54 @@ check('  rpc：量 state 的客户端往返', src.includes('var diagRpcT0 = perf
 check('  只认最近 5 分钟', src.includes('Date.now() - 5 * 60 * 1000'))
 check('  头部只在异常时出现（重绘 ≥100ms / 拉取 ≥500ms / 停摆 ≥600ms）',
   src.includes("if (diagRepaint >= 100)") && src.includes("if (diagRpc >= 500)") && src.includes("if (jank >= 600)"))
+
+console.log('19. 「欠一次表态」必须说清是哪一条（真机 #1348：只报靶子会把旧账吞掉）')
+// 场景与真机一致：人的发言让全体欠回执 → 有人回了 → 一条只 @ 了别人的消息把靶子挪走。
+// 旧面板对第二个人什么也不显示 —— 它欠着 #h1，而屏幕上「已读 N · 已表态 -」看起来一切正常。
+check('靶子上欠的人：报出靶子的 seq',
+  api.owedLabel({ owed: true, overdue: false, owedSeqs: [31] }, 31) === ' · 欠一次表态 #31',
+  api.owedLabel({ owed: true, overdue: false, owedSeqs: [31] }, 31))
+check('  逾时说逾时、并带上 seq',
+  api.owedLabel({ owed: true, overdue: true, owedSeqs: [31] }, 31) === ' · ⚠ 逾时未表态 #31',
+  api.owedLabel({ owed: true, overdue: true, owedSeqs: [31] }, 31))
+check('  同时欠着更早的 → 只报条数，不铺满整行',
+  api.owedLabel({ owed: true, overdue: false, owedSeqs: [7, 19, 31] }, 31) === ' · 欠一次表态 #31（另 2 条更早未回: #7 #19）',
+  api.owedLabel({ owed: true, overdue: false, owedSeqs: [7, 19, 31] }, 31))
+// 这一格是 #1348 的核心：靶子上不欠，但旧账还在。旧面板在这里什么都不说。
+const oldOnly = api.owedLabel({ owed: false, overdue: false, owedSeqs: [7, 19] }, 31)
+check('只在旧账上欠的人也要显示（旧面板这里是空白）', oldOnly.includes('#7') && oldOnly.includes('#19'), oldOnly)
+check('  并且写明它不会被重新唤醒（不许写成"必须回"）',
+  oldOnly.includes('当前靶子 #31 不欠') && oldOnly.indexOf('必须') < 0, oldOnly)
+check('  什么都不欠 → 空串（不要多出一行噪声）', api.owedLabel({ owed: false, owedSeqs: [] }, 31) === '', api.owedLabel({ owed: false, owedSeqs: [] }, 31))
+check('过期 seq 的溢出被收住（最多 3 个 + …）',
+  api.owedLabel({ owed: false, owedSeqs: [1, 2, 3, 4, 5] }, 31).includes('…'),
+  api.owedLabel({ owed: false, owedSeqs: [1, 2, 3, 4, 5] }, 31))
+// 宿主还没重启时快照里没有 owedSeqs：退回旧文案，但**不许把「欠」吞掉**
+check('快照里没有 owedSeqs 时退回旧文案（宿主没重启也不会漏报）',
+  api.owedLabel({ owed: true, overdue: false }, 31) === ' · 欠一次表态',
+  api.owedLabel({ owed: true, overdue: false }, 31))
+check('  逾时的旧文案同样退回', api.owedLabel({ owed: true, overdue: true }, 31) === ' · ⚠ 逾时未表态')
+check('  不欠就是空（旧形状也一样）', api.owedLabel({ owed: false }, 31) === '')
+check('undefined 不炸', api.owedLabel(undefined, 31) === '')
+
+const pendRoom = {
+  targetSeq: 31,
+  pending: ['cccccccc'],
+  pendingDetail: [
+    { sessionId: 'cccccccc-1111', shortId: 'cccccccc', seqs: [31, 7] },
+    { sessionId: 'dddddddd-2222', shortId: 'dddddddd', seqs: [7] },
+  ],
+}
+const pend = api.pendingRows(pendRoom)
+check('靶子上欠的进 target 栏，并点名是哪一条',
+  pend.target.length === 1 && pend.target[0].indexOf('cccccccc') === 0 && pend.target[0].includes('#31'), pend.target)
+check('  同时欠旧账的只报条数（一行读得完）', pend.target[0].includes('另 1 条更早未回'), pend.target[0])
+check('只有旧账的进 older 栏（旧面板完全不显示这些人）',
+  pend.older.length === 1 && pend.older[0].includes('dddddddd') && pend.older[0].includes('#7'), pend.older)
+check('宿主没重启（没有 pendingDetail）→ 退回旧的只报人',
+  JSON.stringify(api.pendingRows({ targetSeq: 3, pending: ['session-eeeeeeee-1'] })) === '{"target":["eeeeeeee"],"older":[]}',
+  api.pendingRows({ targetSeq: 3, pending: ['session-eeeeeeee-1'] }))
+check('空房间不炸', api.pendingRows(null).target.length === 0)
 
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
