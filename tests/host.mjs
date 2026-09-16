@@ -519,6 +519,17 @@ check('被移出这个房间后，段里那一条就没了（其余房间不受�
 await rpc('set-enabled', { roomId: bRoomId, sessionId: B.id, enabled: true })
 check('加回来又有内容', secB2 !== undefined && secB2.text().includes('边界路由'),
   secB2 === undefined ? '' : secB2.text().slice(0, 80))
+// 拼串的边界（真机 #1772 由 255563de 报来）：段是 `你的方向：<散文>；收录范围：…` 直接拼的，
+// 散文自己以句号结尾时就会印出「…负责人。；你负责：…」这种"。；"。只剥尾部标点。
+await tool('room_intent').execute({ room: bRoomId, direction: '负责 web 端点的收尾。', watch: 'quiet' }, exec(B))
+const secDot = secB2 === undefined ? '' : secB2.text()
+check('散文以句号结尾 → 段里不出现「。；」', !secDot.includes('。；') && secDot.includes('负责 web 端点的收尾'), secDot)
+check('  句号也不许变成「…。；收录范围」以外的怪形（分隔符照旧只有一个）',
+  (secDot.match(/收尾[；;。]/g) || []).length === 1, secDot)
+await tool('room_intent').execute({ room: bRoomId, direction: '。', watch: 'quiet' }, exec(B))
+const secOnly = secB2 === undefined ? '' : secB2.text()
+check('散文只有标点（剥完为空）→ 按「还没声明方向」走，不印空的「你的方向：；」',
+  secOnly.includes('你还没声明方向（先调 room_intent）') && !secOnly.includes('你的方向：；'), secOnly)
 // 复原 B 的方向/边界/watch —— 后面的 8.7 依赖它"paths 命中但 excludes 挡住"这个形状。
 // ⚠ watch 必须**显式**给回 quiet：setSelfDescription 的规矩是"不传就保留上一次"（与 paths 同），
 // 而上面刚把它设成过 all；不显式复位，8.7 就会看到一个"观察者席位"（我第一版就是这么错的）。
