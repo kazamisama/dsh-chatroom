@@ -512,6 +512,20 @@ check('  非法值被拒，且带回服务端原话', polBad.ok === false && Str
 const polBack = await rpc('set-policy', { roomId, maxMembers: '5', threadBudget: '4' })
 check('  改回去（不打扰后面的用例）', polBack.ok === true, polBack)
 
+console.log('11. 源码绊线：历史重判必须走**同一套**仓库路由（#1454 那个假红就是"两条路各写各的"）')
+// 这条只能做源码级绊线：重判由插件内部的 10 秒定时器驱动，host 测试里没有可调的钩子。
+// 它抓的形状很具体 —— 重判路径直接拿 change.workspaceId（上一次核验的答案）去解析 ref，
+// 于是"交付物在旁仓"的声明永远重判不回来（真机 2026-09-16 #1454/#1458）。
+const indexSrc = await fs.readFile(new URL('../lib/index.js', import.meta.url), 'utf8')
+const rejudgeBlock = indexSrc.slice(indexSrc.indexOf('for (const change of pending)'),
+  indexSrc.indexOf('for (const change of pending)') + 700)
+check('重判路径先按声明文件定位仓库',
+  rejudgeBlock.includes('await resolveWorktree({ workspace: change.workspaceId'),
+  rejudgeBlock.slice(0, 160))
+check('  并把解析后的 workspace/files 交给 verifyDeclaration',
+  rejudgeBlock.includes('workspace: resolved.workspace,') && rejudgeBlock.includes('files: resolved.files,'),
+  rejudgeBlock.slice(0, 200))
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
