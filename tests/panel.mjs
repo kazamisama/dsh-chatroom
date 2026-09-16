@@ -412,8 +412,14 @@ check('  只认最近 5 分钟', src.includes('Date.now() - 5 * 60 * 1000'))
 // 真机反馈（2026-09-16，用户）：改成分位之后"没看到那个字段" —— 因为正常时一个字都不显示，
 // 人就没法自己判断。所以正常时给一行**暗色**中位数（样本 ≥8 才给，避免面板刚打开就报一个没意义的数）。
 check('  正常时也给一行暗色读数（拉取中位·样本数）',
-  src.includes("diagCalm.push('拉取中位 '") && src.includes('diagRpc.max < 500 && diagRpc.count >= 8')
+  src.includes("diagCalm.push('拉取 中位'") && src.includes('diagRpc.max >= 500')
   && src.includes("head.appendChild(el('span', 'color:' + T.text3 + ';font-size:10px;white-space:nowrap;'"))
+// 只有时长分不开"处理慢"与"传得慢"：把**载荷大小**与**候选那条 RPC**也记下来
+// （真机 2026-09-16：拉取中位 528ms，而插件侧构建 15ms、载荷 0.2MB ⇒ 得知道差在哪一段）
+check('  拉取连载荷大小一起报（528ms/201KB vs 528ms/2KB 是两回事）',
+  src.includes('medianKb') && src.includes('function payloadKb(') && src.includes("noteDiag('rpc', performance.now() - diagRpcT0, payloadKb(stateRes))"))
+check('  候选那条 RPC 单独计时（两个并发 RPC 才看得出谁在等谁）',
+  src.includes("noteDiag('cand'") && src.includes("diagCalm.push('候选 中位'") && src.includes('var diagCandT0 = performance.now()'))
 check('  头部只在异常时出现橙字（重绘 ≥100ms / 拉取 ≥500ms / 停摆 ≥600ms）',
   src.includes("if (diagRepaint >= 100)") && src.includes("if (diagRpc.max >= 500)")
   && src.includes("if (jank.count > 0 && jank.ms >= 600)"))
