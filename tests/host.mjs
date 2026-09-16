@@ -425,9 +425,14 @@ const intentB = await tool('room_intent').execute({
 check('② room_intent 记下结构化边界', intentB.text.includes('机器读的边界 1 条'), intentB.text)
 b0 = callsOf(B).length
 await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/app.py'], summary: '再改 app.py' }, exec(A))
-check('   声明过边界且没命中 → B 不再被叫醒（5 人全叫醒的问题就此收敛）',
-  wakesOf(B, b0) === 0 && callsOf(B).slice(b0).some((c) => c.mode === 'inject'),
+check('   声明过边界且没命中 → B 既不被叫醒，**也不再收到全文注入**（2026-09-16 收窄：推→拉）',
+  wakesOf(B, b0) === 0 && callsOf(B).slice(b0).length === 0,
   callsOf(B).slice(b0).map((c) => c.mode))
+// 反向对照：**没给边界**的人照旧全推 —— 对它来说"不相关"不是事实，是猜测。
+const eNoRule = callsOf(E).length
+await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/elsewhere.py'], summary: '第三处改动' }, exec(A))
+check('   没给结构化边界的人照旧收到背景注入（宁多勿漏只对"必须猜"的人生效）',
+  callsOf(E).slice(eNoRule).some((c) => c.mode === 'inject'), callsOf(E).slice(eNoRule).map((c) => c.mode))
 
 // ③ 改到它的地盘 → 又叫醒它（不是"声明过边界就永远安静"）
 b0 = callsOf(B).length
