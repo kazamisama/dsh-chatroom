@@ -48,6 +48,8 @@ const NAMES = [
   'owedLabel', 'pendingRows',
   // 停摆窗口（2026-09-16：计数与时长必须同一个窗口）
   'recentJank',
+  // 方向 / 机器读的边界两行（2026-09-16：方向被静默截断到 200 字之后，两者第一次有了可见差别）
+  'directionLineOf',
 ]
 const missing = NAMES.filter((n) => extractFunction(src, n) === null)
 if (missing.length > 0) {
@@ -471,6 +473,25 @@ check('全是旧记录 → 计数 0（整块消失，而不是挂着一个陈年
   api.recentJank([jk(10 * 60000, 17000, false)], nowMs).count === 0)
 check('空日志 / undefined 不炸',
   api.recentJank([], nowMs).count === 0 && api.recentJank(undefined, nowMs).ms === 0)
+
+console.log('21. 成员行的「方向 / 边界」两行（2026-09-16：散文被截断，机器读的是 paths）')
+check('有结构化边界 → 单独一行列出，并带不碰项',
+  api.directionLineOf({ selfDescription: '我负责前端', paths: ['a.js', 'b/**'], excludes: ['c.css'] }).bound
+    === '边界 a.js b/**（不碰 c.css）',
+  api.directionLineOf({ selfDescription: '我负责前端', paths: ['a.js', 'b/**'], excludes: ['c.css'] }).bound)
+check('  超过 3 条就省略，不铺满成员行',
+  api.directionLineOf({ paths: ['1', '2', '3', '4', '5'] }).bound.includes('…共 5 条'),
+  api.directionLineOf({ paths: ['1', '2', '3', '4', '5'] }).bound)
+check('只有散文、没有 paths → 明说边界是猜的（会误报/漏报）',
+  api.directionLineOf({ selfDescription: '我负责前端' }).bound === '边界靠散文猜（会误报/漏报）',
+  api.directionLineOf({ selfDescription: '我负责前端' }).bound)
+check('  散文很长 → 显示侧才截（存储是全文），并标出总字数',
+  api.directionLineOf({ selfDescription: 'x'.repeat(300) }).text.includes('（共 300 字）'),
+  api.directionLineOf({ selfDescription: 'x'.repeat(300) }).text.slice(-20))
+check('什么都没有 → 两行都空（调用方据此显示"未声明边界"的红字）',
+  api.directionLineOf({}).text === '' && api.directionLineOf({}).bound === '',
+  api.directionLineOf({}))
+check('undefined 不炸', api.directionLineOf(undefined).bound === '')
 
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')

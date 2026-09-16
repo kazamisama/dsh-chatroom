@@ -45,7 +45,7 @@ transport（面板通道的传输层与各分支状态码，见 BLUEPRINT §11.7
 
 ## 结构
 
-    lib/index.js     Host 半侧：房间注册表 · 变更登记 · 投递引擎 · 7 个工具 · RPC 路由
+    lib/index.js     Host 半侧：房间注册表 · 变更登记 · 投递引擎 · 8 个工具 · RPC 路由
     lib/rooms.js     纯状态机（不依赖任何 DSH API，可独立测试）
     lib/gitcheck.js  变更声明的 git 事实核验（三态）
     lib/client.js    浏览器半侧：会话头部入口 + 浮动面板 + 会话内「聊天室」副页

@@ -1,7 +1,10 @@
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createChatroomStore, shortId, parseMentions, ownedPaths, detectOverreach, saysNoReply, VERDICTS } from '../lib/rooms.js'
+import {
+  createChatroomStore, shortId, parseMentions, ownedPaths, detectOverreach, saysNoReply, VERDICTS,
+  structuredPaths, memberOwnership, matchesOwnedPath, cleanPathList, DIRECTION_MAX_CHARS,
+} from '../lib/rooms.js'
 
 const root = path.join(os.tmpdir(), 'dsh-chatroom-smoke-' + Date.now())
 let pass = 0
@@ -399,6 +402,68 @@ check('被用户关掉的成员不参与（欠账里也不该有它）',
   s4.owedSeqs(r4.id, Q).length === 0 && s4.openObligations(r4.id).length === 0,
   s4.openObligations(r4.id).map((o) => shortId(o.sessionId) + '@' + o.seq))
 await fs.rm(root4, { recursive: true, force: true })
+
+console.log('21. 机器读的边界（真机 2026-09-16：6 人里 3 人的方向被静默截断到 200 字）')
+// 起因（房间 P1）：把散文当机器输入会一直付误报的代价 —— 否定词表为 #45 打过补丁，
+// 而「不进 X 依赖图」这类措辞不在表里；更硬的是方向被 slice(0,200) 砍断，
+// 6126bf05 的「不碰 dashboard.css」在**数据**里只剩 dashbo。
+const sp = structuredPaths(['ulysses/app.py', 'ulysses/runtime/harness/**', 'dashboard.css', '  ', './web/app.py'])
+check('结构化条目按形状判类型（文件 vs 目录）',
+  sp.length === 4 && sp[0].kind === 'file' && sp[1].kind === 'dir' && sp[3].token === 'web/app.py',
+  sp.map((x) => x.token + ':' + x.kind))
+check('  没有扩展名的按目录前缀匹配',
+  matchesOwnedPath('ulysses/core/config.py', structuredPaths(['ulysses/core'])) !== null)
+check('  文件按后缀匹配（短路径命中长路径）',
+  matchesOwnedPath('a/b/dashboard.css', structuredPaths(['dashboard.css'])) !== null)
+check('  非数组 / 空值不炸', structuredPaths(undefined).length === 0 && structuredPaths(null).length === 0)
+let threw21 = null
+try { cleanPathList('not-an-array', 'paths') } catch (err) { threw21 = String(err.message) }
+check('  paths 不是数组 → 报错（不静默当成空）', threw21 !== null && threw21.includes('必须是字符串数组'), threw21)
+threw21 = null
+try { cleanPathList(Array.from({ length: 41 }, (_, i) => 'f' + i + '.py'), 'paths') } catch (err) { threw21 = String(err.message) }
+check('  超过 40 条 → 报错（它不是第二篇散文）', threw21 !== null && threw21.includes('最多 40 条'), threw21)
+
+const ownA = memberOwnership({ paths: ['ulysses/app.py'], selfDescription: '我负责 ulysses/web/** 的端点' })
+check('结构化 + 散文合并成一份边界', ownA.owned.length === 2 && ownA.structured === true, ownA.owned.map((x) => x.token))
+const ownB = memberOwnership({ selfDescription: '不碰 dashboard.css；负责 ulysses/app.py' })
+check('散文里的否定进 excluded（legacy 那条路仍要工作）',
+  ownB.excluded.length === 1 && ownB.owned.length === 1 && ownB.structured === false,
+  { owned: ownB.owned.map((x) => x.token), excluded: ownB.excluded.map((x) => x.token) })
+const ownC = memberOwnership({ subscriptions: ['ulysses/app.py'] })
+check('subscriptions 也算机器可读的边界（旧字段不再是死的）', ownC.structured === true && ownC.owned.length === 1)
+
+const overStruct = detectOverreach(['ulysses/app.py'], [
+  { sessionId: 'me', paths: ['ulysses/app.py'] },
+  { sessionId: 'other', paths: ['ulysses/app.py'] },
+], 'me')
+check('结构化边界参与越界判定（旧实现只读 selfDescription）',
+  overStruct.length === 1 && overStruct[0].sessionId === 'other', overStruct.map((h) => h.sessionId))
+check('  带出结构化来源（⚠ 行据此措辞，不再说"方向第 N 句"）',
+  overStruct[0].matched[0].index === 0 && overStruct[0].matched[0].sentence.includes('结构化'), overStruct[0].matched[0])
+const overExcl = detectOverreach(['dashboard.css'], [
+  { sessionId: 'other', paths: ['dashboard.css'], excludes: ['dashboard.css'] },
+], 'me')
+check('自己声明不碰的 → 不算越界（排除优先）', overExcl.length === 0, overExcl)
+
+console.log('22. 方向存全文、不再静默截断（setSelfDescription）')
+const dRoom = await store.createRoom({ name: '方向长度' })
+const LONG = '负'.repeat(300) + ' ulysses/app.py'
+await store.join(dRoom.id, A, { roleName: '实现者' })
+let m22 = await store.setSelfDescription(dRoom.id, A, LONG, { paths: ['ulysses/app.py'], excludes: ['dashboard.css'] })
+check('300 字方向原样存下（旧实现会砍到 200）', m22.selfDescription.length === LONG.length, m22.selfDescription.length)
+check('  paths / excludes 落库', m22.paths.join() === 'ulysses/app.py' && m22.excludes.join() === 'dashboard.css',
+  { paths: m22.paths, excludes: m22.excludes })
+m22 = await store.setSelfDescription(dRoom.id, A, '改短了')
+check('  不传 paths → 保留上一次的边界（只改散文不会把边界弄丢）',
+  m22.paths.join() === 'ulysses/app.py' && m22.selfDescription === '改短了', { p: m22.paths, d: m22.selfDescription })
+m22 = await store.setSelfDescription(dRoom.id, A, '改短了', { paths: [] })
+check('  显式传空数组 → 清空边界', m22.paths.length === 0, m22.paths)
+let threw22 = null
+try { await store.setSelfDescription(dRoom.id, A, 'x'.repeat(DIRECTION_MAX_CHARS + 1)) } catch (err) { threw22 = String(err.message) }
+check('  超上限 → 报错而不是截断（截断正是这次要修的 bug）', threw22 !== null && threw22.includes('方向太长'), threw22)
+const st22 = store.status(dRoom.id)
+check('  status 把边界带给面板与工具',
+  Array.isArray(st22.members[0].paths) && Array.isArray(st22.members[0].excludes), st22.members[0].paths)
 
 await fs.rm(root, { recursive: true, force: true })
 console.log('')

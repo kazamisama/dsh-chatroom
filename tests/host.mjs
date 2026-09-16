@@ -134,8 +134,8 @@ const callsOf = (agent) => agent.calls
 
 console.log('1. 注册面')
 check('导出 name/inject', name === 'dsh-chatroom' && inject[0] === 'tools', { name, inject })
-check('注册了 7 个工具', registered.length === 7, registered.map((t) => t.name))
-for (const n of ['room_status', 'room_message', 'room_say', 'room_judge', 'room_declare_change', 'room_alert', 'room_intent']) {
+check('注册了 8 个工具', registered.length === 8, registered.map((t) => t.name))
+for (const n of ['room_status', 'room_message', 'room_say', 'room_judge', 'room_declare_change', 'room_alert', 'room_intent', 'room_owners']) {
   check('工具存在: ' + n, tool(n) !== undefined)
   check('  ' + n + ' 有 output.render', typeof tool(n).output.render === 'function')
 }
@@ -369,6 +369,86 @@ await tool('room_judge').execute({ room: mroomId, seq: askedSeq, verdict: 'retes
 const reread = await tool('room_message').execute({ room: mroomId, seq: askedSeq }, exec(A))
 check('  改过的回执读回来是新的那份（旧的不会被当成两条）',
   reread.text.includes('我要重跑') && !reread.text.includes('我接 API 半'), reread.text)
+
+console.log('8.6 边界进路由：谁被唤醒由「负责哪些路径」决定（房间 P0/P1，真机 2026-09-16）')
+// 起因：本房间 5 个会话同工作区 ⇒ 旧实现「同工作区 → 任何改动都算相关」把 5 个人全叫醒，
+// 与 §2.2/§6.4/§10 的「M ≤ N，靠确定性预筛收敛」相悖。
+// 这条测试是**同一个房间内的 A/B**：先看兜底（没声明边界 → 同工作区即相关），
+// 再给 B 声明边界、重复同一次声明 ⇒ B 不该再被叫醒。
+const bRoom = await rpc('create-room', { name: '边界路由' })
+const bRoomId = bRoom.value.room.room.id
+await rpc('join', { roomId: bRoomId, sessionId: A.id, roleName: '实现者' })
+await rpc('join', { roomId: bRoomId, sessionId: B.id, roleName: '审计员' })
+await rpc('join', { roomId: bRoomId, sessionId: E.id, roleName: '跨工作区' })
+const wakesOf = (agent, from) => callsOf(agent).slice(from).filter((c) => c.mode === 'followup').length
+// ① 都没声明边界 → 同工作区兜底（旧行为，故意保留：没声明是它自己的洞）
+let b0 = callsOf(B).length
+let e0 = callsOf(E).length
+await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/app.py'], summary: '改 app.py' }, exec(A))
+check('① 没声明边界 → 同工作区的 B 被兜底唤醒（旧行为）', wakesOf(B, b0) === 1, callsOf(B).slice(b0).map((c) => c.mode))
+check('   跨工作区且文件不存在于它的工作区 → E 不叫', wakesOf(E, e0) === 0, callsOf(E).slice(e0).map((c) => c.mode))
+
+// ② B 声明机器可读的边界之后，**同一次声明**不再叫醒它
+const intentB = await tool('room_intent').execute({
+  room: bRoomId, direction: '负责 web 端点', paths: ['ulysses/web/**'],
+}, exec(B))
+check('② room_intent 记下结构化边界', intentB.text.includes('机器读的边界 1 条'), intentB.text)
+b0 = callsOf(B).length
+await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/app.py'], summary: '再改 app.py' }, exec(A))
+check('   声明过边界且没命中 → B 不再被叫醒（5 人全叫醒的问题就此收敛）',
+  wakesOf(B, b0) === 0 && callsOf(B).slice(b0).some((c) => c.mode === 'inject'),
+  callsOf(B).slice(b0).map((c) => c.mode))
+
+// ③ 改到它的地盘 → 又叫醒它（不是"声明过边界就永远安静"）
+b0 = callsOf(B).length
+await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/web/app.py'], summary: '改 web/app.py' }, exec(A))
+check('③ 命中它的边界 → 照样唤醒', wakesOf(B, b0) === 1, callsOf(B).slice(b0).map((c) => c.mode))
+
+// ④ excludes 优先：它明确说了不碰的，命中也算没关系
+await tool('room_intent').execute({
+  room: bRoomId, direction: '负责 web，但不碰 web/app.py', paths: ['ulysses/web/**'], excludes: ['ulysses/web/app.py'],
+}, exec(B))
+b0 = callsOf(B).length
+await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/web/app.py'], summary: '又改 web/app.py' }, exec(A))
+check('④ 命中的是它声明「不碰」的 → 不唤醒（排除优先）', wakesOf(B, b0) === 0, callsOf(B).slice(b0).map((c) => c.mode))
+
+console.log('8.7 room_owners：动手之前查边界，且与唤醒判定同源')
+const owners = await tool('room_owners').execute({ room: bRoomId, paths: ['ulysses/app.py'], workspace: 'D:\\proj' }, exec(A))
+check('列出会唤醒的人', owners.text.includes('会唤醒（0 人') || owners.text.includes('会唤醒（1 人'), owners.text)
+check('  没给结构化边界的人带原因，且说明"自己声明不会叫醒自己"',
+  owners.text.includes('没给结构化边界 → 回落「同工作区即相关」')
+  && owners.text.includes('自己声明不会叫醒自己'), owners.text)
+// B 在 ④ 里声明了 excludes web/app.py ⇒ 查这个路径时它该出现在"不会被唤醒"并给出原因
+const owners2 = await tool('room_owners').execute({ room: bRoomId, paths: ['ulysses/web/app.py'], workspace: 'D:\\proj' }, exec(A))
+check('  命中它声明「不碰」的路径 → 进"不会被唤醒"并给原因',
+  owners2.text.includes('不会被唤醒') && owners2.text.includes('1b68df32') && owners2.text.includes('不碰'), owners2.text)
+// 换一个真属于 B 的路径：它该出现在会唤醒名单，并提示先 @ 负责人
+const owners3 = await tool('room_owners').execute({ room: bRoomId, paths: ['ulysses/web/other.js'], workspace: 'D:\\proj' }, exec(A))
+check('  命中它的边界 → 进"会唤醒"并提示先 @ 负责人',
+  owners3.text.includes('会唤醒（1 人') && owners3.text.includes('1b68df32') && owners3.text.includes('别悄悄改'), owners3.text)
+// **同源检查**：查询说会叫醒谁，room_declare_change 就真叫醒谁（同一个函数，不许两张表各说各话）
+b0 = callsOf(B).length
+await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/web/other.js'], summary: '同源核对' }, exec(A))
+check('  同源：查询说会叫醒 1 人（B），声明就真的只叫醒 1 人',
+  owners3.text.includes('会唤醒（1 人') && wakesOf(B, b0) === 1, { owner: owners3.text.split('\n')[1], woke: wakesOf(B, b0) })
+
+console.log('8.8 人的发言也能定向（P5）与边界的可视化（P6）')
+// 不 @ → 全体（D4 不变）；@ 了 → 只有被点的人欠回执
+let hum = await rpc('say', { roomId: bRoomId, text: '全体都看一下' })
+const humSeq1 = hum.value.message.seq
+const stHum1 = await tool('room_status').execute({ room: bRoomId }, exec(A))
+check('人发言不 @ → 全体欠（靶子就是这条）',
+  stHum1.text.includes('待表态（靶子 #' + humSeq1 + '）'), stHum1.text)
+hum = await rpc('say', { roomId: bRoomId, text: '@1b68df32 只看你这一份' })
+const humSeq2 = hum.value.message.seq
+const stHum2 = await tool('room_status').execute({ room: bRoomId }, exec(A))
+const pendingLine = stHum2.text.split('\n').find((l) => l.includes('待表态（靶子 #' + humSeq2 + '）')) || ''
+check('人发言 @ 了谁 → 只叫谁（人数不再等于每条消息的成本）',
+  pendingLine.includes('1b68df32') && !pendingLine.includes('83d4e6de'), pendingLine)
+check('room_status 把边界摆出来（谁负责哪些路径）',
+  stHum2.text.includes('边界 ulysses/web/**'), stHum2.text.split('\n').filter((l) => l.includes('边界')).join(' | '))
+check('  未声明边界的人被标出来（它是边界图上的洞）',
+  stHum2.text.includes('未声明边界'), stHum2.text)
 
 console.log('9. 非法输入被拒绝')
 const bad = await rpc('judge', { roomId, seq: 1, sessionId: A.id, verdict: '随便' })
