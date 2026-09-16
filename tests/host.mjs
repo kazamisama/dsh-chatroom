@@ -43,14 +43,26 @@ function check(label, cond, extra) {
 
 function fakeAgent(id, status = 'idle', cwd = 'D:\\proj') {
   const calls = []
-  return {
+  const sections = []
+  const agent = {
     id, status,
     session: { id, header: { cwd } },
     calls,
+    sections,
     followup(m) { calls.push({ mode: 'followup', message: m }) },
     inject(m) { calls.push({ mode: 'inject', message: m }) },
     steer(m) { calls.push({ mode: 'steer', message: m }) },
   }
+  // 按 agent 作用域注册 system prompt 段的成例（DSH 第一方 dsh-file-reference-local 就是这么写的）：
+  //   agent.ctx.inject(['systemPrompt'], scope => scope.systemPrompt.section({ name, order, text }))
+  // 假 agent 只记录注册到了什么 —— 边界段那几条用例就是靠它断言的。
+  agent.ctx = {
+    inject: (deps, cb) => {
+      cb({ systemPrompt: { section: (spec) => { sections.push(spec); return () => {} } } })
+      return { dispose: () => {} }
+    },
+  }
+  return agent
 }
 
 const A = fakeAgent('session-aaaabbbb-1111-2222-3333-444455556666')
@@ -480,6 +492,38 @@ const stWatch = await tool('room_status').execute({ room: bRoomId }, exec(A))
 const watchLines = stWatch.text.split('\n').filter((l) => l.includes('静音席位') || l.includes('观察者席位')).join(' | ')
 check('room_status 把「按设计不认领」写成静音/观察者，而不是「⚠ 未声明边界」',
   stWatch.text.includes('静音席位') && !watchLines.includes('未声明边界'), watchLines)
+
+console.log('8.68 成员边界进**自己的** system prompt（真机 #1732）')
+// 起点：方向此前只活在房间侧 + 被叫醒那一帧的帧尾 ⇒ 自己开工 / 用户直接对话 / 新窗口第一轮都看不到自己的边界。
+// 做法：把一条 section 注册进**这个 agent 自己的作用域**，且 text() 每次组装现算。
+const secB2 = B.sections.find((s) => s.name === 'chatroom:boundary')
+check('投递时给成员装上了 chatroom:boundary 段（按 agent 作用域，不是全局）',
+  secB2 !== undefined, B.sections.map((s) => s.name))
+check('  段文本读的是**活状态**（此刻列出 B 所在的房间与边界）',
+  secB2 !== undefined && typeof secB2.text === 'function' && secB2.text().includes('边界路由'),
+  secB2 === undefined ? '(没装上)' : secB2.text().slice(0, 160))
+await tool('room_intent').execute({ room: bRoomId, direction: '改过的方向：只看 web', watch: 'all' }, exec(B))
+check('  —— 改方向后，同一个段（没重装）的 text() 就是新的',
+  secB2 !== undefined && secB2.text().includes('改过的方向'), secB2 === undefined ? '' : secB2.text().slice(0, 140))
+check('  段里带机器读的边界与收录范围',
+  secB2 !== undefined && secB2.text().includes('ulysses/web/**') && secB2.text().includes('收录范围'),
+  secB2 === undefined ? '' : secB2.text().slice(0, 200))
+// 段文本按房间逐条算：被移出**这个**房间后，那一条要消失（其余房间照旧）——
+// 完全不出现（空串）只发生在"一个房间都不在"的时候，那是空段自动消失那一档。
+await rpc('set-enabled', { roomId: bRoomId, sessionId: B.id, enabled: false })
+check('被移出这个房间后，段里那一条就没了（其余房间不受影响）',
+  secB2 !== undefined && !secB2.text().includes('边界路由') && secB2.text().includes('变更同步'),
+  secB2 === undefined ? '' : secB2.text().slice(0, 160))
+await rpc('set-enabled', { roomId: bRoomId, sessionId: B.id, enabled: true })
+check('加回来又有内容', secB2 !== undefined && secB2.text().includes('边界路由'),
+  secB2 === undefined ? '' : secB2.text().slice(0, 80))
+// 复原 B 的方向/边界/watch —— 后面的 8.7 依赖它"paths 命中但 excludes 挡住"这个形状。
+// ⚠ watch 必须**显式**给回 quiet：setSelfDescription 的规矩是"不传就保留上一次"（与 paths 同），
+// 而上面刚把它设成过 all；不显式复位，8.7 就会看到一个"观察者席位"（我第一版就是这么错的）。
+await tool('room_intent').execute({
+  room: bRoomId, direction: '负责 web，但不碰 web/app.py', paths: ['ulysses/web/**'],
+  excludes: ['ulysses/web/app.py'], watch: 'quiet',
+}, exec(B))
 
 console.log('8.7 room_owners：动手之前查边界，且与唤醒判定同源')
 const owners = await tool('room_owners').execute({ room: bRoomId, paths: ['ulysses/app.py'], workspace: 'D:\\proj' }, exec(A))

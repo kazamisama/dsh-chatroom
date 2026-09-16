@@ -1711,6 +1711,33 @@ the HMR watch's registration hook"，`lib/index.js:536` 附近），文件一变
 包括那些本来想要全量的席位。所以审计/观察席必须**显式** `watch="all"`，否则它会静默变安静
 （这条我在房间里 @ 了审计方，因为"该收全量的人收不到"比"多收一点"糟）。
 
+## 11.35 方向进**自己的** system prompt —— 从"被叫醒才看得到"到"每轮都在"（真机 #1732 · 已改，宿主侧待重启）
+
+**报的是什么**（255563de 的第三条）：方向此前只活在房间侧 `rooms.json` + **被叫醒那一帧的帧尾**。
+于是三种回合里会话**不知道自己的边界**：自己开工 / 用户直接跟它对话 / 新窗口第一轮；
+而帧尾那份是 fan-out 时的快照（§11.33 记过它滞后的问题），压缩之后还可能是旧的。
+
+**它附的硬约束我核了、成立**：`AssembleContext` 只有 `{ scope, signal }`、**没有 agent/session 身份**
+（`dsh-system-prompt/lib/types/index.d.ts:37-45`）⇒ **注册一条全局 section、在 `text()` 里"看这次组装的是谁"是做不到的**。
+
+**可行的那条路（它猜的是对的，我找到了第一方成例）**：`dsh-file-reference-local/lib/index.js:339-349`
+
+    const fiber = agent.ctx.inject(['systemPrompt', 'tools'], (scope) => {
+      scope.systemPrompt.section({ name: 'context:file-reference', order: …, text: () => … })
+    })
+
+⇒ **把 section 注册进"这个 agent 自己的作用域"**（`scope: agent`，见 `dsh-agent` 的 dispatch）。
+本插件照此实现 `chatroom:boundary`（order 161，紧跟全局协议段 160）：
+`text()` 闭包住 sessionId、读 store 的当前值 ⇒ **每次组装现算**，方向一改下一轮就是新的
+（这正是帧尾那条快照补不上的一格）；不在任何房间 ⇒ 返回空串 ⇒ **空段自动消失，不占 token**。
+
+**装在哪三处**：① 启动时给"已有成员里活着的 agent"装一遍；② `agent/created` 事件（**新窗口第一轮**就是靠它）；
+③ `deliver()` 里兜一道（换 agent 对象会重装）。卸载时统一 dispose。
+
+**成本（真机复算，13 人）**：第一版按"全文方向 + 全部 paths"算是中位 **460 字 / 最长 1091 字** —— 太贵，
+所以这条段自带上限：方向截 200 字、paths 只列前 4 条（要全的 `room_status` 拉）⇒ 中位 **344 字 / 最长 409 字**。
+**它是提醒，不是台账**；而"每轮都在"这件事本身是它的全部价值。
+
 ## 12. 风险与未决
 
 1. ~~**冷会话唤醒**：活着的 Agent 好办；没有活 Agent 的顶层会话能否由插件唤醒待确认。~~
