@@ -249,6 +249,63 @@ check('有效 ref 覆盖该文件 → 已证实（refState=ok）',
 r11 = await verifyDeclaration({ workspace: repo, files: ['refcheck.py'], anchorMs: Date.now() - 60000, anchorLabel: '本次会话开始' })
 check('没给 ref → 照旧走分层证据', r11.verdict === 'verified' && r11.refState === null, r11)
 
+console.log('9. 声明落在**另一个仓库**里（真机 2026-09-16 #1454/#1455：一份诚实声明被判「ref 无效」）')
+// 真机形状：会话 cwd 是 ulysses 仓，改的却是隔壁 dsh-ulysses-mcp 仓。
+// 旧实现在"会话工作区本身是仓库"时直接拿它核验 ⇒ ref 在那个仓库里当然查不到 ⇒ 判「ref 无效 ⇒ 声明不成立」。
+const aRepo = path.join(root, 'aRepo')
+const bRepo = path.join(root, 'bRepo')
+await fs.mkdir(aRepo, { recursive: true })
+await fs.mkdir(path.join(bRepo, 'src'), { recursive: true })
+await fs.mkdir(path.join(bRepo, 'tests'), { recursive: true })
+await git(aRepo, ['init', '-q', '-b', 'main'])
+await git(aRepo, ['config', 'user.email', 'test@example.com'])
+await git(aRepo, ['config', 'user.name', 'test'])
+await fs.writeFile(path.join(aRepo, 'only-a.py'), 'a = 1\n', 'utf8')
+await git(aRepo, ['add', '.'])
+await git(aRepo, ['commit', '-q', '-m', 'a-init'])
+await git(bRepo, ['init', '-q', '-b', 'main'])
+await git(bRepo, ['config', 'user.email', 'test@example.com'])
+await git(bRepo, ['config', 'user.name', 'test'])
+await fs.writeFile(path.join(bRepo, 'src', 'x.py'), 'x = 1\n', 'utf8')
+await fs.writeFile(path.join(bRepo, 'tests', 'y.py'), 'y = 1\n', 'utf8')
+await git(bRepo, ['add', '.'])
+await git(bRepo, ['commit', '-q', '-m', 'b-init'])
+const bHead = (await git(bRepo, ['rev-parse', 'HEAD'])).trim()
+const aHead = (await git(aRepo, ['rev-parse', 'HEAD'])).trim()
+
+const rw = await resolveWorktree({ workspace: aRepo, files: ['../bRepo/src/x.py', '../bRepo/tests/y.py'] })
+check('回溯到**声明文件**所在的仓库（不是会话那个）',
+  path.normalize(rw.workspace) === path.normalize(bRepo) && rw.fallback === true, rw)
+check('  理由写明"文件不在会话工作区的仓库里"',
+  rw.reason === 'declared-files-outside-session-workspace', rw.reason)
+check('  文件改写成该仓库内的相对路径（跨两个目录 —— 顺带覆盖"多目录回溯"那条修正）',
+  rw.files.join() === 'src/x.py,tests/y.py', rw.files)
+
+let rB9 = await verifyDeclaration({ workspace: rw.workspace, files: rw.files, ref: bHead })
+check('该仓库里的 ref → 已证实（修复前：判「ref 无效 ⇒ 与事实不符」）',
+  rB9.verdict === 'verified' && rB9.refState === 'ok', rb)
+check('  每个文件都标了 ref 覆盖', rB9.files.every((f) => f.refCovers === true), rB9.files)
+check('  描述写明 git 事实取自哪个仓库', describeVerification({ ...rB9, workspaceUsed: bRepo, repoFallback: true, repoReason: rw.reason })
+  .includes('git 事实取自 bRepo 仓库') &&
+  describeVerification({ ...rB9, workspaceUsed: bRepo, repoFallback: true, repoReason: rw.reason })
+    .includes('不在会话工作区那个仓库里'),
+  describeVerification({ ...rB9, workspaceUsed: bRepo, repoFallback: true, repoReason: rw.reason }))
+
+// 反向对照：**不许**放宽成"ref 在哪个仓库里都算数"
+rB9 = await verifyDeclaration({ workspace: bRepo, files: ['src/x.py'], ref: aHead })
+check('别的仓库的 commit 仍不算数（ref-not-found）', rB9.verdict !== 'verified' && rB9.reason === 'ref-not-found', rB9.reason)
+check('  而且说清查的是哪个仓库（下次一眼看得出来）',
+  describeVerification({ ...rB9, workspaceUsed: bRepo }).includes('查的是 bRepo 仓库'),
+  describeVerification({ ...rB9, workspaceUsed: bRepo }))
+
+// 跨仓库的一份声明 → 不把两个仓库的结论拼成一句（宁可未证实）
+const rw2 = await resolveWorktree({ workspace: aRepo, files: ['only-a.py', '../bRepo/src/x.py'] })
+check('一份声明横跨两个仓库 → 不回溯', rw2.fallback === false && rw2.workspace === aRepo, rw2)
+// 会话 cwd 是几个仓库的父目录（老兜底路径）仍然有效
+const rw3 = await resolveWorktree({ workspace: root, files: ['bRepo/src/x.py'] })
+check('父目录兜底那条第仍成立（bRepo/src/x.py → bRepo 仓）',
+  path.normalize(rw3.workspace) === path.normalize(bRepo) && rw3.files.join() === 'src/x.py', rw3)
+
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
