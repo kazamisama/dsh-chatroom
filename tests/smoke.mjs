@@ -468,6 +468,9 @@ console.log('22b. 观察者/静音席位 —— 收录范围与"有没有领地"
 m22 = await store.setSelfDescription(dRoom.id, A, '只读审计席，不认领任何路径', { watch: 'all' })
 check('watch=all 落库', m22.watch === 'all' && (m22.paths || []).length === 0, { watch: m22.watch, paths: m22.paths })
 check('  它**不需要** paths 也能表达收录范围', store.status(dRoom.id).members[0].watch === 'all')
+// **只收不答席**（真机 #1798）：两根轴（推不推 × 要不要每条都应一声）里缺的那个角。
+m22 = await store.setSelfDescription(dRoom.id, A, '安全审计席：要看得见，不必每条都应一声', { watch: 'feed' })
+check('watch=feed 落库（全推 + 不产生义务）', m22.watch === 'feed' && store.status(dRoom.id).members[0].watch === 'feed')
 m22 = await store.setSelfDescription(dRoom.id, A, '静音席', { watch: 'none' })
 check('watch=none 落库', m22.watch === 'none')
 let threw22b = null

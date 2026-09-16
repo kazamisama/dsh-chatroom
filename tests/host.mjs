@@ -495,6 +495,29 @@ const watchLines = stWatch.text.split('\n').filter((l) => l.includes('静音席�
 check('room_status 把「按设计不认领」写成静音/观察者，而不是「⚠ 未声明边界」',
   stWatch.text.includes('静音席位') && !watchLines.includes('未声明边界'), watchLines)
 
+console.log('8.67 只收不答席 watch=feed —— 全推、但不产生义务（真机 #1798 补的那个角）')
+// 缺的那一格：既有的三档里，`all`=全推+每条都唤醒、`quiet`=不推、`none`=不推且不叫；
+// 「要看得见、但不必每条都应一声」表达不出来 —— 于是第二类观察席只能二选一（每小时几十次无谓回合，或看不见）。
+const feedIntent = await tool('room_intent').execute(
+  { room: bRoomId, direction: '安全审计席：要看得见，不必每条都应一声', watch: 'feed' }, exec(E))
+check('room_intent 接受 watch=feed，并说清「不产生义务」',
+  feedIntent.text.includes('只收不答席') && feedIntent.text.includes('不产生义务'), feedIntent.text)
+eWatch = callsOf(E).length
+await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/whatever.py'], summary: '安全席看一眼这次改动' }, exec(A))
+const feedCalls = callsOf(E).slice(eWatch)
+check('  变更通知照推（走背景通道 inject）', feedCalls.some((c) => c.mode === 'inject'), feedCalls.map((c) => c.mode))
+check('  但**不产生义务**（没有 followup「你必须回一句」）',
+  feedCalls.length > 0 && feedCalls.every((c) => c.mode !== 'followup'), feedCalls.map((c) => c.mode))
+const owFeed = await tool('room_owners').execute({ room: bRoomId, paths: ['ulysses/whatever.py'], workspace: 'D:\\proj' }, exec(A))
+const feedLine = owFeed.text.split('\n').find((l) => l.includes('eeeeffff')) || ''
+check('  room_owners 写明它是只收不答（不是「看不见」，也不是「观察者席位」）',
+  feedLine.includes('只收不答') && feedLine.includes('不产生义务'), feedLine)
+const stFeed = await tool('room_status').execute({ room: bRoomId }, exec(A))
+check('  room_status 单独一档显示', stFeed.text.includes('只收不答席（变更全推、不产生义务）'),
+  stFeed.text.split('\n').find((l) => l.includes('eeeeffff')))
+// 复原成 none —— 后面的 8.7/8.75 按「它是不叫醒的席位」写断言。
+await tool('room_intent').execute({ room: bRoomId, direction: '静音席（不收变更）', watch: 'none' }, exec(E))
+
 console.log('8.68 成员边界进**自己的** system prompt（真机 #1732）')
 // 起点：方向此前只活在房间侧 + 被叫醒那一帧的帧尾 ⇒ 自己开工 / 用户直接对话 / 新窗口第一轮都看不到自己的边界。
 // 做法：把一条 section 注册进**这个 agent 自己的作用域**，且 text() 每次组装现算。
