@@ -518,6 +518,23 @@ check('  room_status 单独一档显示', stFeed.text.includes('只收不答席�
 // 复原成 none —— 后面的 8.7/8.75 按「它是不叫醒的席位」写断言。
 await tool('room_intent').execute({ room: bRoomId, direction: '静音席（不收变更）', watch: 'none' }, exec(E))
 
+console.log('8.67b watch=none 那句括号说的是**哪条通道**（真机 #1824，S7 报的措辞歧义）')
+// 那句话出现在 room_owners 里，读者会读成「**声明**里 @ 我仍会叫到我」—— 而声明通道的义务
+// 只来自 related(=wouldWake) ∪ overreach（正文里的 @ 根本不参与）。把两条通道各自钉一条行为断言：
+eWatch = callsOf(E).length
+await tool('room_declare_change').execute(
+  { room: bRoomId, files: ['ulysses/whatever.py'], summary: '@eeeeffff 这条是**声明**：正文里 @ 了它' }, exec(A))
+check('  声明正文里的 @ 不产生义务（静音席什么都不收）',
+  callsOf(E).slice(eWatch).length === 0, callsOf(E).slice(eWatch).map((c) => c.mode))
+eWatch = callsOf(E).length
+await tool('room_say').execute({ room: bRoomId, text: '@eeeeffff 这条是**普通发言**：@ 才真的叫到你' }, exec(A))
+check('  普通发言里的 @ 会叫到它（这才是那句括号的意思）',
+  callsOf(E).slice(eWatch).some((c) => c.mode === 'followup'), callsOf(E).slice(eWatch).map((c) => c.mode))
+const owNone = await tool('room_owners').execute({ room: bRoomId, paths: ['ulysses/whatever.py'], workspace: 'D:\\proj' }, exec(A))
+const noneLine = owNone.text.split('\n').find((l) => l.includes('eeeeffff')) || ''
+check('  room_owners 那句写清了是哪条通道',
+  noneLine.includes('普通发言') && noneLine.includes('声明正文里的 @ 不算'), noneLine)
+
 console.log('8.68 成员边界进**自己的** system prompt（真机 #1732）')
 // 起点：方向此前只活在房间侧 + 被叫醒那一帧的帧尾 ⇒ 自己开工 / 用户直接对话 / 新窗口第一轮都看不到自己的边界。
 // 做法：把一条 section 注册进**这个 agent 自己的作用域**，且 text() 每次组装现算。
