@@ -379,7 +379,7 @@ check('计数与时长必须同窗口（旧写法混了两个窗口）',
   !src.includes('jankCount') && !src.includes('jankWorstMs') && !src.includes('recentJankMs'))
 check('  并且带上"最近一次是什么时候"（回答"还在发生吗"）', src.includes("+ ' · ' + ago(jank.at)"))
 check('  累计值降级到悬停提示（"新问题还是老问题"是另一个问题）',
-  src.includes("warnEl.title = '自本页加载以来共 ' + jankTotal"))
+  src.includes("'自本页加载以来共 ' + jankTotal") && src.includes('diagWrap.title = ['))
 
 console.log('17. 打字让路（真机 2026-09-14 用户自测：关掉聊天室窗口后延迟消失）')
 check('识别"用户正对着输入框"', src.includes('function userIsTyping()') &&
@@ -412,8 +412,18 @@ check('  只认最近 5 分钟', src.includes('Date.now() - 5 * 60 * 1000'))
 // 真机反馈（2026-09-16，用户）：改成分位之后"没看到那个字段" —— 因为正常时一个字都不显示，
 // 人就没法自己判断。所以正常时给一行**暗色**中位数（样本 ≥8 才给，避免面板刚打开就报一个没意义的数）。
 check('  正常时也给一行暗色读数（拉取中位·样本数）',
-  src.includes("diagCalm.push('拉取 中位'") && src.includes('diagRpc.max >= 500')
-  && src.includes("head.appendChild(el('span', 'color:' + T.text3 + ';font-size:10px;white-space:nowrap;'"))
+  src.includes("diagCalm.push('拉取 '") && src.includes('diagRpc.max >= 500')
+  && src.includes("diagWrap.appendChild(el('span', 'color:' + T.text3 + ';'"))
+// ⚠ UI（真机截图 2026-09-16）：诊断行长度不可控，旧写法把标题挤成 0 宽、自己截断在半个数上、
+// 右边的拖动/抽屉/关闭被推出面板。现在：标题定宽、诊断行自己省略号、全文进悬停、按钮 flex:none。
+check('诊断行不会把标题/按钮挤走',
+  src.includes("el('span', 'flex:none;white-space:nowrap;', '会话聊天室')")
+  && src.includes('flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;')
+  && src.includes("grip: 'flex:none;opacity:.55;"))
+check('  被省略号吃掉的部分进悬停（含"主机自报多少"那一格）',
+  src.includes('diagWrap.title = [') && src.includes('其余是通道/排队'))
+check('  时长紧凑化（2443ms → 2.4s，380px 头部才放得下）',
+  src.includes('function fmtMs(') && src.includes("(v / 1000).toFixed(1) + 's'"))
 // 只有时长分不开"处理慢"与"传得慢"：把**载荷大小**与**候选那条 RPC**也记下来
 // （真机 2026-09-16：拉取中位 528ms，而插件侧构建 15ms、载荷 0.2MB ⇒ 得知道差在哪一段）
 check('  拉取连载荷大小一起报（528ms/201KB vs 528ms/2KB 是两回事）',
@@ -424,7 +434,7 @@ check('  拉取连载荷大小一起报（528ms/201KB vs 528ms/2KB 是两回事�
 check('  往返里再分出"主机自报了多少"（一次减法定性）',
   src.includes('function hostMsOf(') && src.includes('medianHost') && src.includes('function hostBit('))
 check('  候选那条 RPC 单独计时（两个并发 RPC 才看得出谁在等谁）',
-  src.includes("noteDiag('cand'") && src.includes("diagCalm.push('候选 中位'") && src.includes('var diagCandT0 = performance.now()'))
+  src.includes("noteDiag('cand'") && src.includes("diagCalm.push('候选 '") && src.includes('var diagCandT0 = performance.now()'))
 check('  头部只在异常时出现橙字（重绘 ≥100ms / 拉取 ≥500ms / 停摆 ≥600ms）',
   src.includes("if (diagRepaint >= 100)") && src.includes("if (diagRpc.max >= 500)")
   && src.includes("if (jank.count > 0 && jank.ms >= 600)"))
