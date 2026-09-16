@@ -461,6 +461,21 @@ check('  显式传空数组 → 清空边界', m22.paths.length === 0, m22.paths
 let threw22 = null
 try { await store.setSelfDescription(dRoom.id, A, 'x'.repeat(DIRECTION_MAX_CHARS + 1)) } catch (err) { threw22 = String(err.message) }
 check('  超上限 → 报错而不是截断（截断正是这次要修的 bug）', threw22 !== null && threw22.includes('方向太长'), threw22)
+
+console.log('22b. 观察者/静音席位 —— 收录范围与"有没有领地"是两根轴（真机 #1714）')
+// 真机代价：只读席位一晚被唤醒 10 次、0 次与职责相关；而工具还建议它"补 paths 就能收敛"
+// —— 对"要收全量变更"的审计席，那条建议是错的（补了就漏审）。
+m22 = await store.setSelfDescription(dRoom.id, A, '只读审计席，不认领任何路径', { watch: 'all' })
+check('watch=all 落库', m22.watch === 'all' && (m22.paths || []).length === 0, { watch: m22.watch, paths: m22.paths })
+check('  它**不需要** paths 也能表达收录范围', store.status(dRoom.id).members[0].watch === 'all')
+m22 = await store.setSelfDescription(dRoom.id, A, '静音席', { watch: 'none' })
+check('watch=none 落库', m22.watch === 'none')
+let threw22b = null
+try { await store.setSelfDescription(dRoom.id, A, 'x', { watch: 'sometimes' }) } catch (err) { threw22b = String(err.message) }
+check('  非法值拒绝而不是夹取（与 paths/policy 同一套口径）',
+  threw22b !== null && threw22b.includes('watch 只能是'), threw22b)
+m22 = await store.setSelfDescription(dRoom.id, A, '改回普通')
+check('  不传 watch → 保留上一次的（与 paths 同一条规矩）', m22.watch === 'none', m22.watch)
 const st22 = store.status(dRoom.id)
 check('  status 把边界带给面板与工具',
   Array.isArray(st22.members[0].paths) && Array.isArray(st22.members[0].excludes), st22.members[0].paths)

@@ -442,6 +442,30 @@ b0 = callsOf(B).length
 await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/web/app.py'], summary: '又改 web/app.py' }, exec(A))
 check('④ 命中的是它声明「不碰」的 → 不唤醒（排除优先）', wakesOf(B, b0) === 0, callsOf(B).slice(b0).map((c) => c.mode))
 
+console.log('8.65 观察者/静音席位 —— 收录范围与"有没有领地"是两根轴（真机 #1714）')
+// 真机代价：只读审计席一晚被唤醒 10 次、0 次与职责相关；而 room_owners 还建议它"补 paths 就能收敛"
+// —— 对"要收全量变更"的席位，那条建议是错的（补了就漏审）。E 在另一个工作区，本来不会被叫。
+const watchIntent = await tool('room_intent').execute({ room: bRoomId, direction: '只读审计席（不认领任何路径）', watch: 'all' }, exec(E))
+check('room_intent 接受 watch=all，且**不再催** paths',
+  watchIntent.text.includes('观察者席位') && !watchIntent.text.includes('你没给 paths'), watchIntent.text)
+let eWatch = callsOf(E).length
+await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/whatever.py'], summary: '旁观改动' }, exec(A))
+check('  观察者席位收到变更唤醒（连跨工作区也一样）',
+  callsOf(E).slice(eWatch).some((c) => c.mode === 'followup'), callsOf(E).slice(eWatch).map((c) => c.mode))
+const owWatch = await tool('room_owners').execute({ room: bRoomId, paths: ['ulysses/whatever.py'], workspace: 'D:\\proj' }, exec(A))
+const watcherLine = owWatch.text.split('\n').find((l) => l.includes('eeeeffff')) || ''
+check('  room_owners 对它写「观察者席位」、不再建议补 paths',
+  watcherLine.includes('观察者席位') && !watcherLine.includes('补 room_intent'), watcherLine)
+await tool('room_intent').execute({ room: bRoomId, direction: '静音席（不收变更）', watch: 'none' }, exec(E))
+eWatch = callsOf(E).length
+await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/whatever.py'], summary: '再看一次' }, exec(A))
+check('  静音席位不再被叫（背景通道仍收得到）',
+  callsOf(E).slice(eWatch).every((c) => c.mode !== 'followup'), callsOf(E).slice(eWatch).map((c) => c.mode))
+const stWatch = await tool('room_status').execute({ room: bRoomId }, exec(A))
+const watchLines = stWatch.text.split('\n').filter((l) => l.includes('静音席位') || l.includes('观察者席位')).join(' | ')
+check('room_status 把「按设计不认领」写成静音/观察者，而不是「⚠ 未声明边界」',
+  stWatch.text.includes('静音席位') && !watchLines.includes('未声明边界'), watchLines)
+
 console.log('8.7 room_owners：动手之前查边界，且与唤醒判定同源')
 const owners = await tool('room_owners').execute({ room: bRoomId, paths: ['ulysses/app.py'], workspace: 'D:\\proj' }, exec(A))
 check('列出会唤醒的人', owners.text.includes('会唤醒（0 人') || owners.text.includes('会唤醒（1 人'), owners.text)
