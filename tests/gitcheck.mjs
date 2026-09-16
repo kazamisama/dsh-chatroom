@@ -206,6 +206,41 @@ check('  结论仍是未证实（查不到 ≠ 撒谎）', rn.verdict === 'unver
 check('  但理由说清「两边都找过了」', describeVerification({ ...rn, reason: 'no-worktree-found' }).includes('都不是 git 工作区'),
   describeVerification({ ...rn, reason: 'no-worktree-found' }))
 
+console.log('10b. 路径少写了一级 → 结论自己要说清「少写的是哪一级」（真机 2026-09-16，我自己撞的）')
+// 真机形状：会话 cwd = D:\dsh_dev（几个仓库的父目录），我把声明写成了仓库相对的 `BLUEPRINT.md`
+// ⇒ 解析成 D:\dsh_dev\BLUEPRINT.md：文件不存在、目录也不是仓库 ⇒ 未证实，
+// 而结论里没有一个字说明「你少写了一级」，只能自己去翻 store。
+const slipParent = path.join(root, 'slip')
+const slipRepo = path.join(slipParent, 'plugin')
+await fs.mkdir(slipRepo, { recursive: true })
+await git(slipRepo, ['init', '-q', '-b', 'main'])
+await git(slipRepo, ['config', 'user.email', 'test@example.com'])
+await git(slipRepo, ['config', 'user.name', 'test'])
+await fs.writeFile(path.join(slipRepo, 'BLUEPRINT.md'), '# blueprint\n', 'utf8')
+await git(slipRepo, ['add', '.'])
+await git(slipRepo, ['commit', '-q', '-m', 'init'])
+const slip = await resolveWorktree({ workspace: slipParent, files: ['BLUEPRINT.md'] })
+check('路径少了一级 → 不自动改路径（仍判不出仓库）',
+  slip.fallback === false && slip.reason === 'no-worktree-found', slip)
+check('  但记下了「同名文件在哪个子目录里」',
+  slip.nearMiss.candidates.length === 1 && slip.nearMiss.candidates[0].dir === 'plugin', slip.nearMiss)
+const slipV = await verifyDeclaration({ workspace: slip.workspace, files: slip.files })
+const slipText = describeVerification({ ...slipV, nearMiss: slip.nearMiss })
+check('  结论里给出可操作的那一句（连例子一起）',
+  slipText.includes('plugin/BLUEPRINT.md') && slipText.includes('会话工作目录相对'), slipText)
+check('  并且说清「没有替你改路径」', slipText.includes('没有替你改路径'), slipText)
+const slipOk = await resolveWorktree({ workspace: slipParent, files: ['plugin/BLUEPRINT.md'] })
+check('  正对照：带上那一级 → 正常回溯到那个仓库',
+  slipOk.fallback === true && path.normalize(slipOk.workspace) === path.normalize(slipRepo), slipOk)
+const slipNone = await resolveWorktree({ workspace: slipParent, files: ['nope.py'] })
+check('同名文件找不到 → 至少列出这个目录下面的仓库',
+  slipNone.nearMiss.candidates.length === 0 && slipNone.nearMiss.subrepos.includes('plugin'), slipNone.nearMiss)
+const slipNoText = describeVerification({ ...(await verifyDeclaration({ workspace: slipNone.workspace, files: slipNone.files })), nearMiss: slipNone.nearMiss })
+check('  提示里点名那个仓库，且不编造同名文件',
+  slipNoText.includes('plugin') && !slipNoText.includes('同名文件'), slipNoText)
+check('没路径问题时不加这段噪音（正常未证实结论里没有「路径提示」）',
+  !describeVerification(rn).includes('路径提示'), describeVerification(rn))
+
 console.log('11. ref 无效不许静默退回（真机 #623 报的：随便写个 ref 也拿到了「已证实」）')
 // 真机形状：声明里给了 ref，而那个 hash 在仓库里**根本不存在**；核验却退回
 // 「文件覆盖 + 会话时间」那条路判成「已证实」—— 于是 ref 只是个装饰。
