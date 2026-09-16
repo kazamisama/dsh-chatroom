@@ -111,11 +111,13 @@ const connectionService = {
 
 // 会话查询：候选列表的标题与「持久化语料」都来自它
 const DORMANT = 'session-deadbeef-0000-1111-2222-333333333333'
+// 可变：8.75 会往里加一条"只有会话表知道的冷会话"（会话表是成员工作区的那个稳来源）
+const sessionRows = [
+  { header: { id: A.id, cwd: 'D:\\proj', createdAt: 100 }, live: true, persisted: true },
+  { header: { id: DORMANT, cwd: 'D:\\other', createdAt: 200 }, live: false, persisted: true },
+]
 const sessionQueryService = {
-  listSessions: async () => [
-    { header: { id: A.id, cwd: 'D:\\proj', createdAt: 100 }, live: true, persisted: true },
-    { header: { id: DORMANT, cwd: 'D:\\other', createdAt: 200 }, live: false, persisted: true },
-  ],
+  listSessions: async () => sessionRows,
   // 这个服务在真机上很贵（"几百条要 20 秒"），所以用它来验证「请求路径上有没有等它」：
   // 测试里临时把延迟拉高，看 state 会不会跟着慢。
   readTitleSnapshots: async (ids) => {
@@ -544,6 +546,48 @@ b0 = callsOf(B).length
 await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/web/other.js'], summary: '同源核对' }, exec(A))
 check('  同源：查询说会叫醒 1 人（B），声明就真的只叫醒 1 人',
   owners3.text.includes('会唤醒（1 人') && wakesOf(B, b0) === 1, { owner: owners3.text.split('\n')[1], woke: wakesOf(B, b0) })
+
+console.log('8.75 成员工作区：**未知 ≠ 不在**（真机 #1756 —— 同一个提问、两次相反的答案）')
+// 真机：`room_owners(paths=["ulysses/app.py"])` 23:57 说「会唤醒 0 人」、00:06 说 3 人，参数一字未改。
+// 差别只在那一刻 6126bf05 有没有活 Agent —— 当时唯一的工作区来源就是活 Agent：
+// 取不到 ⇒ 静默不叫，还把理由写成「不在它的工作区里」（**断言一个它并不知道的事实**）。
+// 现在两条都改：① 加会话表这一源（与存活无关）；② 取不到 ⇒ 按保守口径照样叫 + 如实说「未知」。
+const F = fakeAgent('session-fff00000-1111-2222-3333-444455556666') // 只用来拿 id，不进 live 表
+const shortOf = (id) => id.replace(/^session-/, '').slice(0, 8)
+// 房间默认上限 5 人（DEFAULT_MAX_MEMBERS），而这一段要再进 3 个；
+// 顺带记一笔：**join 撞上限时只是 ok:false**（不抛），所以下面每个 join 都核对返回值 ——
+// 第一版就是漏了这一步，DORMANT 静默没进房间，③ 才以「查不到那一行」的形式失败。
+const pol8 = await rpc('set-policy', { roomId: bRoomId, maxMembers: 8 })
+check('  先把成员上限抬到 8（否则第 3 个 join 会静默失败）', pol8.ok === true, pol8)
+sessionRows.push({ header: { id: F.id, cwd: 'D:\\proj', createdAt: 300 }, live: false, persisted: true })
+const jF = await rpc('join', { roomId: bRoomId, sessionId: F.id, roleName: '只有会话表知道它' })
+check('  join F（只有会话表知道它）', jF.ok === true, jF)
+await tool('room_intent').execute({ room: bRoomId, direction: '负责 app.py（冷会话）', paths: ['ulysses/app.py'], watch: 'quiet' }, exec(F))
+const jC = await rpc('join', { roomId: bRoomId, sessionId: C.id, roleName: '谁都查不到它' })
+check('  join C（哪个源都查不到它）', jC.ok === true, jC)
+await tool('room_intent').execute({ room: bRoomId, direction: '负责 app.py（分布未知）', paths: ['ulysses/app.py'], watch: 'quiet' }, exec(C))
+const jD = await rpc('join', { roomId: bRoomId, sessionId: DORMANT })
+check('  join DORMANT（会话表说它在别的仓库）', jD.ok === true, jD)
+await tool('room_intent').execute({ room: bRoomId, direction: '别的工作区也有一份', paths: ['ulysses/app.py'], watch: 'quiet' },
+  exec(fakeAgent(DORMANT, 'idle', 'D:\\other')))
+const ow176 = await tool('room_owners').execute({ room: bRoomId, paths: ['ulysses/app.py'], workspace: 'D:\\proj' }, exec(A))
+const lineOf176 = (id) => ow176.text.split('\n').find((l) => l.includes('[' + shortOf(id) + ']')) || ''
+check('① 会话表这一源：冷会话也按工作区命中（改前会被静默丢掉）',
+  lineOf176(F.id).includes('命中结构化边界') && !lineOf176(F.id).includes('未知'), lineOf176(F.id))
+check('② 工作区取不到 ⇒ 保守口径叫它，并如实说「未知」',
+  lineOf176(C.id).includes('未知') && lineOf176(C.id).includes('命中结构化边界'), lineOf176(C.id))
+check('  且不再写「不在它的工作区里」（那是它不知道的事实）',
+  !lineOf176(C.id).includes('不在它的工作区里'), lineOf176(C.id))
+check('③ 已核对确实在别的仓库 ⇒ 仍然不误伤', lineOf176(DORMANT).includes('不在它的工作区里'), lineOf176(DORMANT))
+check('  表尾有 ⚠ 汇总（别把「取不到」读成「没人负责」）',
+  ow176.text.includes('工作区**取不到**'), ow176.text.split('\n').slice(-1)[0])
+check('  查询说会唤醒 2 人（F 与 C；A 是调用者自己、B 不命中、E 是静音席）',
+  ow176.text.includes('会唤醒（2 人'), ow176.text.split('\n')[1])
+// **同源**：查询说会叫醒谁，声明就真叫醒谁（同一个函数，不许两张表各说各话）—— 冷会话也在名单里。
+const w0 = callsOf(A).length
+const decl176 = await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/app.py'], summary: '同源核对（含冷会话）' }, exec(A))
+check('  同源：声明也叫醒 2 人（冷会话照样进名单）', decl176.text.includes('已唤醒 2 名'), decl176.text)
+void w0
 
 console.log('8.8 人的发言也能定向（P5）与边界的可视化（P6）')
 // 不 @ → 全体（D4 不变）；@ 了 → 只有被点的人欠回执
