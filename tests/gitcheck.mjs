@@ -238,6 +238,13 @@ check('同名文件找不到 → 至少列出这个目录下面的仓库',
 const slipNoText = describeVerification({ ...(await verifyDeclaration({ workspace: slipNone.workspace, files: slipNone.files })), nearMiss: slipNone.nearMiss })
 check('  提示里点名那个仓库，且不编造同名文件',
   slipNoText.includes('plugin') && !slipNoText.includes('同名文件'), slipNoText)
+// 真机还有更绕的一层：**同名文件在会话工作目录下也存在**（`D:\dsh_dev\BLUEPRINT.md` 是个 0 字节残file），
+// 所以「文件不存在」不能当初筛 —— 只看同名文件在哪个子目录里也有一份。
+await fs.writeFile(path.join(slipParent, 'BLUEPRINT.md'), '', 'utf8')
+const slipDecoy = await resolveWorktree({ workspace: slipParent, files: ['BLUEPRINT.md'] })
+const decoyText = describeVerification({ ...(await verifyDeclaration({ workspace: slipDecoy.workspace, files: slipDecoy.files })), nearMiss: slipDecoy.nearMiss })
+check('同名文件在会话目录也存在时，照样点名子目录里那份', decoyText.includes('plugin/BLUEPRINT.md'), decoyText)
+check('  而且**不说**「不存在」（那会把人带去删错文件）', !decoyText.includes('不存在'), decoyText)
 check('没路径问题时不加这段噪音（正常未证实结论里没有「路径提示」）',
   !describeVerification(rn).includes('路径提示'), describeVerification(rn))
 
