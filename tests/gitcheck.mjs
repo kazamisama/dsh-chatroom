@@ -226,6 +226,8 @@ check('  但记下了「同名文件在哪个子目录里」',
   slip.nearMiss.candidates.length === 1 && slip.nearMiss.candidates[0].dir === 'plugin', slip.nearMiss)
 const slipV = await verifyDeclaration({ workspace: slip.workspace, files: slip.files })
 const slipText = describeVerification({ ...slipV, nearMiss: slip.nearMiss })
+check('  提示里那句「在哪个子目录」是人能读的路径（不是 [object Object]）',
+  !slipText.includes('[object') && slipText.includes('但 plugin/BLUEPRINT.md 存在'), slipText)
 check('  结论里给出可操作的那一句（连例子一起）',
   slipText.includes('plugin/BLUEPRINT.md') && slipText.includes('会话工作目录相对'), slipText)
 check('  并且说清「没有替你改路径」', slipText.includes('没有替你改路径'), slipText)
@@ -243,7 +245,8 @@ check('  提示里点名那个仓库，且不编造同名文件',
 await fs.writeFile(path.join(slipParent, 'BLUEPRINT.md'), '', 'utf8')
 const slipDecoy = await resolveWorktree({ workspace: slipParent, files: ['BLUEPRINT.md'] })
 const decoyText = describeVerification({ ...(await verifyDeclaration({ workspace: slipDecoy.workspace, files: slipDecoy.files })), nearMiss: slipDecoy.nearMiss })
-check('同名文件在会话目录也存在时，照样点名子目录里那份', decoyText.includes('plugin/BLUEPRINT.md'), decoyText)
+check('同名文件在会话目录也存在时，照样点名子目录里那份',
+  !decoyText.includes('[object') && decoyText.includes('这个名字的文件在 plugin/BLUEPRINT.md 里也有一份'), decoyText)
 check('  而且**不说**「不存在」（那会把人带去删错文件）', !decoyText.includes('不存在'), decoyText)
 check('没路径问题时不加这段噪音（正常未证实结论里没有「路径提示」）',
   !describeVerification(rn).includes('路径提示'), describeVerification(rn))
