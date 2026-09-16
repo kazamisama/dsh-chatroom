@@ -50,6 +50,8 @@ const NAMES = [
   'recentJank',
   // 方向 / 机器读的边界两行（2026-09-16：方向被静默截断到 200 字之后，两者第一次有了可见差别）
   'directionLineOf',
+  // 拉取的分布（2026-09-16 方案 a：最大值读不出"尖峰还是常态"）
+  'recentStats',
 ]
 const missing = NAMES.filter((n) => extractFunction(src, n) === null)
 if (missing.length > 0) {
@@ -403,7 +405,7 @@ check('  重绘：render() 自己计时（含早退路径也不至于记脏数�
 check('  rpc：量 state 的客户端往返', src.includes('var diagRpcT0 = performance.now()'))
 check('  只认最近 5 分钟', src.includes('Date.now() - 5 * 60 * 1000'))
 check('  头部只在异常时出现（重绘 ≥100ms / 拉取 ≥500ms / 停摆 ≥600ms）',
-  src.includes("if (diagRepaint >= 100)") && src.includes("if (diagRpc >= 500)")
+  src.includes("if (diagRepaint >= 100)") && src.includes("if (diagRpc.max >= 500)")
   && src.includes("if (jank.count > 0 && jank.ms >= 600)"))
 
 console.log('19. 「欠一次表态」必须说清是哪一条（真机 #1348：只报靶子会把旧账吞掉）')
@@ -492,6 +494,25 @@ check('什么都没有 → 两行都空（调用方据此显示"未声明边界"
   api.directionLineOf({}).text === '' && api.directionLineOf({}).bound === '',
   api.directionLineOf({}))
 check('undefined 不炸', api.directionLineOf(undefined).bound === '')
+
+console.log('22. recentStats —— 拉取的分布（2026-09-16 方案 a：最大值读不出形状）')
+const nowS = Date.now()
+const sample = (msAgo, ms) => ({ at: nowS - msAgo, ms: ms })
+const spike = api.recentStats([sample(1000, 4457), sample(2000, 90), sample(3000, 88), sample(4000, 120)], nowS)
+check('尖峰：最坏 4457 / 中位介于 90 与 120 之间',
+  spike.max === 4457 && spike.count === 4 && spike.median === Math.round((90 + 120) / 2), spike)
+check('  并给出最坏那次的时刻（"4 分钟前"往往就是页面刚加载那一刻）',
+  spike.maxAt === nowS - 1000, spike.maxAt)
+const steady = api.recentStats([sample(1000, 4457), sample(2000, 3900), sample(3000, 4100)], nowS)
+check('常态慢：中位也是几千（与尖峰一眼可分）', steady.median === 4100 && steady.max === 4457, steady)
+check('窗口外的样本不算', api.recentStats([sample(6 * 60000, 9000), sample(1000, 50)], nowS).count === 1,
+  api.recentStats([sample(6 * 60000, 9000), sample(1000, 50)], nowS))
+check('奇数个样本取正中间那个', api.recentStats([sample(1, 10), sample(2, 20), sample(3, 30)], nowS).median === 20)
+check('空样本 / undefined 不炸',
+  api.recentStats([], nowS).count === 0 && api.recentStats(undefined, nowS).max === 0 &&
+  api.recentStats([], nowS).median === 0)
+check('全是旧样本 → 计数 0（头部那一行整块消失）',
+  api.recentStats([sample(10 * 60000, 5000)], nowS).count === 0)
 
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
