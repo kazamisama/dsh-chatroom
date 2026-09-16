@@ -244,8 +244,8 @@ check('声明被受理，且查不到时不判撒谎', declared.verdict === 'unv
 check('同工作区的 B 被叫醒（followup，必须表态）',
   callsOf(B).length === beforeB + 1 && callsOf(B)[beforeB].mode === 'followup',
   callsOf(B).slice(beforeB).map((c) => c.mode))
-check('异工作区且无同名文件的 E 只收背景 inject（不被打扰）',
-  callsOf(E).length === beforeE + 1 && callsOf(E)[beforeE].mode === 'inject',
+check('异工作区且无同名文件的 E 既不叫也不推（quiet 默认：连背景都不进上下文）',
+  callsOf(E).length === beforeE,
   callsOf(E).slice(beforeE).map((c) => c.mode))
 check('发送者不会收到自己的回声', callsOf(A).length === beforeA)
 const st3 = await rpc('state', {})
@@ -287,7 +287,8 @@ await rpc('join', { roomId: mroomId, sessionId: B.id, roleName: '审计员' })
 const bBefore1 = callsOf(B).length
 await tool('room_say').execute({ room: mroomId, text: '我改完了，你们看着办' }, exec(A))
 const quiet = callsOf(B).slice(bBefore1)
-check('不 @ 任何人 → 只进背景通道（inject），不唤醒', quiet.length > 0 && quiet.every((c) => c.mode === 'inject'),
+check('不 @ 任何人 → 不唤醒（quiet 默认下连背景也不再推；要收全量用 watch=all，见 8.66）',
+  quiet.every((c) => c.mode !== 'followup'),
   quiet.map((c) => c.mode))
 const bBefore2 = callsOf(B).length
 const atSay = await tool('room_say').execute({ room: mroomId, text: '@1b68df32 请确认载荷' }, exec(A))
@@ -307,13 +308,13 @@ check('  返回值说明唤醒了谁', /已唤醒 1 人/.test(atSay.text), atSay
 const bBeforeText = callsOf(B).length
 const quietText = await tool('room_say').execute({ room: mroomId, text: '@1b68df32 顺带同步一下：不需要回应' }, exec(A))
 const afterText = callsOf(B).slice(bBeforeText)
-check('正文写了「不需要回应」→ 不产生义务，只走背景通道',
-  afterText.length > 0 && afterText.every((c) => c.mode === 'inject'), afterText.map((c) => c.mode))
+check('正文写了「不需要回应」→ 不产生义务、也不推（quiet 默认）',
+  afterText.every((c) => c.mode !== 'followup'), afterText.map((c) => c.mode))
 check('  返回值说明为什么没唤醒', /没有登记义务/.test(quietText.text), quietText.text)
 const bBeforeFlag = callsOf(B).length
 const quietFlag = await tool('room_say').execute({ room: mroomId, text: '@1b68df32 只是提到你', wake: false }, exec(A))
 const afterFlag = callsOf(B).slice(bBeforeFlag)
-check('wake=false → 同样不产生义务', afterFlag.length > 0 && afterFlag.every((c) => c.mode === 'inject'),
+check('wake=false → 同样不产生义务、也不推', afterFlag.every((c) => c.mode !== 'followup'),
   afterFlag.map((c) => c.mode))
 check('  返回值写明是 wake=false', /wake=false/.test(quietFlag.text), quietFlag.text)
 check('  并且**列出被压掉的短号**（#1598：作者常把"提到 N 人"读成"我 @ 成功了"）',
@@ -345,7 +346,7 @@ check('  返回值提示「标记只压它所在的那一行」', sameLine.text.
 const bBeforeQuote = callsOf(B).length
 await tool('room_say').execute({ room: mroomId, text: '原文写着 `@1b68df32 请确认载荷`（只是引述）' }, exec(A))
 const afterQuote = callsOf(B).slice(bBeforeQuote)
-check('行内 code 里引述的 @ 不产生义务', afterQuote.length > 0 && afterQuote.every((c) => c.mode === 'inject'),
+check('行内 code 里引述的 @ 不产生义务', afterQuote.every((c) => c.mode !== 'followup'),
   afterQuote.map((c) => c.mode))
 const aBeforeSelf = callsOf(A).length
 const selfSay = await tool('room_say').execute({ room: mroomId, text: '@aaaabbbb 我自己补一句' }, exec(A))
@@ -428,11 +429,20 @@ await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/app.
 check('   声明过边界且没命中 → B 既不被叫醒，**也不再收到全文注入**（2026-09-16 收窄：推→拉）',
   wakesOf(B, b0) === 0 && callsOf(B).slice(b0).length === 0,
   callsOf(B).slice(b0).map((c) => c.mode))
-// 反向对照：**没给边界**的人照旧全推 —— 对它来说"不相关"不是事实，是猜测。
-const eNoRule = callsOf(E).length
-await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/elsewhere.py'], summary: '第三处改动' }, exec(A))
-check('   没给结构化边界的人照旧收到背景注入（宁多勿漏只对"必须猜"的人生效）',
-  callsOf(E).slice(eNoRule).some((c) => c.mode === 'inject'), callsOf(E).slice(eNoRule).map((c) => c.mode))
+// 收录范围（用户 2026-09-16：默认 quiet，审计方 watch=all）
+const eQuiet = callsOf(E).length
+await tool('room_say').execute({ room: bRoomId, text: '一条纯背景发言，不点名任何人' }, exec(A))
+check('默认档（quiet）：别人的闲聊不再推到未声明 watch 的人面前',
+  callsOf(E).slice(eQuiet).length === 0, callsOf(E).slice(eQuiet).map((c) => c.mode))
+await tool('room_intent').execute({ room: bRoomId, direction: '审计席：全量收录', watch: 'all' }, exec(E))
+const eAll = callsOf(E).length
+await tool('room_say').execute({ room: bRoomId, text: '再一条纯背景发言' }, exec(A))
+check('观察者席（watch=all）：同样的闲聊照收（零义务的背景通道）',
+  callsOf(E).slice(eAll).some((c) => c.mode === 'inject'), callsOf(E).slice(eAll).map((c) => c.mode))
+const eHuman = callsOf(E).length
+await rpc('say', { roomId: bRoomId, text: '人的一句话（全体要回）' })
+check('人的发言一律照推（D4 不受收录范围影响）',
+  callsOf(E).slice(eHuman).some((c) => c.mode === 'followup'), callsOf(E).slice(eHuman).map((c) => c.mode))
 
 // ③ 改到它的地盘 → 又叫醒它（不是"声明过边界就永远安静"）
 b0 = callsOf(B).length
@@ -452,7 +462,7 @@ console.log('8.65 观察者/静音席位 —— 收录范围与"有没有领地"
 // —— 对"要收全量变更"的席位，那条建议是错的（补了就漏审）。E 在另一个工作区，本来不会被叫。
 const watchIntent = await tool('room_intent').execute({ room: bRoomId, direction: '只读审计席（不认领任何路径）', watch: 'all' }, exec(E))
 check('room_intent 接受 watch=all，且**不再催** paths',
-  watchIntent.text.includes('观察者席位') && !watchIntent.text.includes('你没给 paths'), watchIntent.text)
+  watchIntent.text.includes('观察者/审计席') && !watchIntent.text.includes('你没给 paths'), watchIntent.text)
 let eWatch = callsOf(E).length
 await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/whatever.py'], summary: '旁观改动' }, exec(A))
 check('  观察者席位收到变更唤醒（连跨工作区也一样）',
