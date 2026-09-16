@@ -310,6 +310,30 @@ const afterFlag = callsOf(B).slice(bBeforeFlag)
 check('wake=false → 同样不产生义务', afterFlag.length > 0 && afterFlag.every((c) => c.mode === 'inject'),
   afterFlag.map((c) => c.mode))
 check('  返回值写明是 wake=false', /wake=false/.test(quietFlag.text), quietFlag.text)
+check('  并且**列出被压掉的短号**（#1598：作者常把"提到 N 人"读成"我 @ 成功了"）',
+  quietFlag.text.includes('压掉 1 人（1b68df32）'), quietFlag.text)
+
+// 段落级抑制（真机 #1587/#1596/#1597 的重放证据：整条抑制把别处的真提问一起吞了）
+const bBeforeScope = callsOf(B).length
+const scoped = await tool('room_say').execute({
+  room: mroomId,
+  text: '@1b68df32 **请把 §2 那行改掉**\n另给某人一条更正（不需要回应）：那是个旧快照\n@aaaabbbb 请裁一句',
+}, exec(A))
+const afterScope = callsOf(B).slice(bBeforeScope)
+check('标记独占一行时，别处的 @ **照常唤醒**（#1587 的形状）',
+  afterScope.some((c) => c.mode === 'followup'), afterScope.map((c) => c.mode))
+check('  返回值把保住的人列出来', /@ 了 \d+ 人（1b68df32/.test(scoped.text) || scoped.text.includes('1b68df32'), scoped.text)
+check('  并且提示"标记只压它所在那一行"',
+  scoped.text.includes('只压它所在的那一行'), scoped.text)
+// 反向对照：同一个人「这一行通知、那一行提问」→ 保住（去重按"至少一处要回"）
+const bBeforeSame = callsOf(B).length
+const sameLine = await tool('room_say').execute({
+  room: mroomId,
+  text: '@1b68df32 这条只是通知（不需要回应）\n@1b68df32 但这条真的要你回一句',
+}, exec(A))
+check('同一人一行被标记、另一行是提问 → 保住（不因为一处标注丢掉提问）',
+  callsOf(B).slice(bBeforeSame).some((c) => c.mode === 'followup'), callsOf(B).slice(bBeforeSame).map((c) => c.mode))
+check('  返回值提示「标记只压它所在的那一行」', sameLine.text.includes('只压它所在的那一行'), sameLine.text)
 
 // 引述即提及（真机 #58）：引述里的 @ 不该把人叫起来；自己也不该被自己 @ 到
 const bBeforeQuote = callsOf(B).length

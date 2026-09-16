@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  createChatroomStore, shortId, parseMentions, ownedPaths, detectOverreach, saysNoReply, VERDICTS,
+  createChatroomStore, shortId, parseMentions, parseMentionsScoped, ownedPaths, detectOverreach, saysNoReply, VERDICTS,
   structuredPaths, memberOwnership, matchesOwnedPath, cleanPathList, DIRECTION_MAX_CHARS,
 } from '../lib/rooms.js'
 
@@ -464,6 +464,56 @@ check('  超上限 → 报错而不是截断（截断正是这次要修的 bug�
 const st22 = store.status(dRoom.id)
 check('  status 把边界带给面板与工具',
   Array.isArray(st22.members[0].paths) && Array.isArray(st22.members[0].excludes), st22.members[0].paths)
+
+console.log('23. 「不需要回应」是**段落级**的（真机 #1587/#1596/#1597/#1598/#1609，有重放证据）')
+// 缺陷形状：整条 includes 一次 ⇒ 一处逐条标注把同一条消息里别处的真 @ 全压掉，
+// 房间判「没有 @ 任何人」，两个真提问静默降级成背景（S6 重放：那三条的 mentions 全是 null）。
+// #1606 更狠：作者为了解释被吞而**原样引了一遍那句话** ⇒ 缺陷被解释动作再触发一次。
+const mm23 = [
+  { sessionId: 'session-aaaa1111-0001', roleName: '甲' },
+  { sessionId: 'session-bbbb2222-0002', roleName: '乙' },
+  { sessionId: 'session-cccc3333-0003', roleName: '' },
+]
+const A23 = mm23[0].sessionId
+const B23 = mm23[1].sessionId
+const C23 = mm23[2].sessionId
+const s23 = (text) => parseMentionsScoped(text, mm23, null)
+
+const sameLine = s23('@aaaa1111 顺带同步一下：不需要回应')
+check('同一行里「@ + 不需要回应」→ 照旧不进义务（#55 那条钉子的形状没变）',
+  sameLine.mentions.length === 0 && sameLine.suppressed.join() === A23, sameLine)
+
+const otherLine = s23('@aaaa1111 请把 §2 改掉\n另给乙一条更正（不需要回应）\n@bbbb2222 请裁一句')
+check('#1587 的形状：标记独占一行 → **两个真 @ 都保住**',
+  otherLine.mentions.join() === [A23, B23].join(), otherLine)
+check('  那一行没有 @ ⇒ 不压任何人', otherLine.suppressed.length === 0, otherLine.suppressed)
+check('  但记下"见过标记"（返回值据此提示作者）', otherLine.markedLines === 1, otherLine.markedLines)
+
+const mixed = s23('@aaaa1111 这条不用回（不需要回应）\n@bbbb2222 这条要回')
+check('同行压掉、异行保住 —— 粒度是"行"不是"条"',
+  mixed.mentions.join() === B23 && mixed.suppressed.join() === A23, mixed)
+
+const none = s23('@aaaa1111 正常提问\n@bbbb2222 另一件事')
+check('没有标记 → 全部登记', none.mentions.join() === [A23, B23].join() && none.suppressed.length === 0, none)
+check('  没有 @ 也没有标记 → 空（纯背景）', s23('只是一条记录').mentions.length === 0)
+check('  引述里的 @ 仍不算（段落级不放松引述规则）',
+  s23('原文写着 `@aaaa1111 请确认`（只是引述）\n@bbbb2222 请回这句').mentions.join() === B23,
+  s23('原文写着 `@aaaa1111 请确认`（只是引述）\n@bbbb2222 请回这句'))
+check('  角色名也吃同一套规则',
+  s23('@甲 不用回（不需要回应）\n@乙 请回').mentions.join() === B23, s23('@甲 不用回（不需要回应）\n@乙 请回'))
+check('  同一个人在两行都被点到、其中一行要压制 → 保住（去重按"至少一处要回"）',
+  s23('@cccc3333（不需要回应）\n@cccc3333 请回这句').mentions.join() === C23,
+  s23('@cccc3333（不需要回应）\n@cccc3333 请回这句'))
+check('undefined / 空文本不炸', s23(undefined).mentions.length === 0 && s23('').suppressed.length === 0)
+// **引述里的标记不算**（#1597 的真机形状：作者为了解释这条缺陷，把「不需要回应」原样引了一遍）
+check('引述里的标记不算（作者在解释这个 bug 时不会再触发它）',
+  s23('@aaaa1111 上一条我写了「不需要回应」，所以被吞了 —— 请把 §2 改掉').mentions.join() === A23,
+  s23('@aaaa1111 上一条我写了「不需要回应」，所以被吞了 —— 请把 §2 改掉'))
+check('  行内 code / 代码块里的标记同样不算',
+  s23('@aaaa1111 词表里有 `不需要回应` 这一条，请裁一句').mentions.join() === A23
+  && s23('@aaaa1111 见下：\n```\n不需要回应\n```').mentions.join() === A23)
+check('  但**非引述**的括号标注照旧算（#55 的形状不能被引述规则误伤）',
+  s23('@aaaa1111 顺带同步一下（不需要回应）').mentions.length === 0)
 
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
