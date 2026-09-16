@@ -417,7 +417,12 @@ check('  正常时也给一行暗色读数（拉取中位·样本数）',
 // 只有时长分不开"处理慢"与"传得慢"：把**载荷大小**与**候选那条 RPC**也记下来
 // （真机 2026-09-16：拉取中位 528ms，而插件侧构建 15ms、载荷 0.2MB ⇒ 得知道差在哪一段）
 check('  拉取连载荷大小一起报（528ms/201KB vs 528ms/2KB 是两回事）',
-  src.includes('medianKb') && src.includes('function payloadKb(') && src.includes("noteDiag('rpc', performance.now() - diagRpcT0, payloadKb(stateRes))"))
+  src.includes('medianKb') && src.includes('function payloadKb(')
+  && src.includes("noteDiag('rpc', performance.now() - diagRpcT0, payloadKb(stateRes), hostMsOf(stateRes))"))
+// 往返 = 主机 + 通道。只有把主机自报的那一段减出来，"慢在通道"与"慢在我"才分得开 ——
+// 真机 2026-09-16 那个 890ms 就是靠这条减法定性到 readTitleSnapshots 上的。
+check('  往返里再分出"主机自报了多少"（一次减法定性）',
+  src.includes('function hostMsOf(') && src.includes('medianHost') && src.includes('function hostBit('))
 check('  候选那条 RPC 单独计时（两个并发 RPC 才看得出谁在等谁）',
   src.includes("noteDiag('cand'") && src.includes("diagCalm.push('候选 中位'") && src.includes('var diagCandT0 = performance.now()'))
 check('  头部只在异常时出现橙字（重绘 ≥100ms / 拉取 ≥500ms / 停摆 ≥600ms）',

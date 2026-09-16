@@ -104,12 +104,18 @@ const sessionQueryService = {
     { header: { id: A.id, cwd: 'D:\\proj', createdAt: 100 }, live: true, persisted: true },
     { header: { id: DORMANT, cwd: 'D:\\other', createdAt: 200 }, live: false, persisted: true },
   ],
-  readTitleSnapshots: async (ids) => ids.map((id) => ({
-    sessionId: id,
-    status: 'fulfilled',
-    value: { session: { id }, title: { title: '会话标题-' + String(id).slice(-8) } },
-  })),
+  // 这个服务在真机上很贵（"几百条要 20 秒"），所以用它来验证「请求路径上有没有等它」：
+  // 测试里临时把延迟拉高，看 state 会不会跟着慢。
+  readTitleSnapshots: async (ids) => {
+    if (titleDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, titleDelayMs))
+    return ids.map((id) => ({
+      sessionId: id,
+      status: 'fulfilled',
+      value: { session: { id }, title: { title: '会话标题-' + String(id).slice(-8) } },
+    }))
+  },
 }
+let titleDelayMs = 0
 
 const ctx = {
   get: (k) => ({
@@ -557,6 +563,21 @@ check('  「从什么改成什么」的 former 在改写前读（否则会写出
 check('  并把解析后的 workspace/files 交给 verifyDeclaration',
   rejudgeBlock.includes('workspace: resolved.workspace,') && rejudgeBlock.includes('files: resolved.files,'),
   rejudgeBlock.slice(0, 200))
+
+console.log('12. state 不在请求路径上取标题（真机 2026-09-16：往返中位 890ms，而插件自身只要 15ms）')
+// 真机读数：候选 中位894ms/14KB 与 拉取 中位890ms 几乎相等、载荷差 14 倍 ⇒ 不是载荷、不是处理器；
+// 两条 RPC 共用的只有 readTitleSnapshots（state 给成员取、candidates 给 45 个会话取）。
+// 这里把那个服务拖慢，验证 state 不再等它。
+titleDelayMs = 400
+const tState = Date.now()
+const stSlow = await rpc('state', {})
+const dtState = Date.now() - tState
+check('标题服务慢 400ms 时 state 仍然快（标题只读缓存 + 后台预热）', dtState < 150, { ms: dtState })
+check('  载荷里带主机自报耗时（面板据此把"通道"与"我"分开）',
+  stSlow.ok === true && stSlow.value.ms !== undefined && typeof stSlow.value.ms.total === 'number',
+  stSlow.ok === true ? stSlow.value.ms : stSlow)
+titleDelayMs = 0
+await new Promise((resolve) => setTimeout(resolve, 500)) // 等后台预热收尾，别影响后面的用例
 
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
