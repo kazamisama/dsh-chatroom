@@ -384,11 +384,16 @@ check('  累计值降级到悬停提示（"新问题还是老问题"是另一个
 console.log('17. 打字让路（真机 2026-09-14 用户自测：关掉聊天室窗口后延迟消失）')
 check('识别"用户正对着输入框"', src.includes('function userIsTyping()') &&
   src.includes("tag === 'textarea' || tag === 'input'") && src.includes('el.isContentEditable === true'))
-check('  刷新时让路（打在重绘闸门之前）', refreshSrc !== null && refreshSrc.includes('if (userIsTyping()) return'))
+check('  刷新时让路（打在重绘闸门之前）',
+  refreshSrc !== null && refreshSrc.includes('if (force !== true && userIsTyping()) return'))
 check('  让路判断在后台判断之后、组字判断之前',
   refreshSrc !== null &&
-  refreshSrc.indexOf('if (document.hidden === true) return') < refreshSrc.indexOf('if (userIsTyping()) return') &&
-  refreshSrc.indexOf('if (userIsTyping()) return') < refreshSrc.indexOf('renderBlocked(dragging, composing)'))
+  refreshSrc.indexOf('if (document.hidden === true) return') < refreshSrc.indexOf('if (force !== true && userIsTyping()) return') &&
+  refreshSrc.indexOf('if (force !== true && userIsTyping()) return') < refreshSrc.indexOf('renderBlocked(dragging, composing)'))
+// 真机 2026-09-16：刷新页面后光标还在 composer 里，此时打开面板 ⇒ 每次轮询都提前返回 ⇒ 面板**永远空白**
+// （我盯了 80 秒一帧都没有），而且没有 RPC ⇒ 诊断也被饿死（头部连"拉取"都不显示）。
+check('  但打开面板的第一帧不受让路约束（空面板比一次重绘更打扰人）',
+  src.includes('refresh(true) // 第一帧不受') && src.includes('function refresh(force)'))
 check('失焦不再触发重画（那次实现可能自激：重绘换节点 → focusout → 重绘…）',
   !src.includes("document.addEventListener('focusout', function () {"))
 check('重绘节流：400ms 内不重复重建（切断任何"重绘触发重绘"的环）',
