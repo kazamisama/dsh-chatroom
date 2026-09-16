@@ -286,6 +286,12 @@ check('  未读计数用**全部消息**（不是那 40 条切片）',
 check('  「跳到最新」按钮在场且用 sticky 钉底',
   buildSrc !== null && buildSrc.includes('position:sticky') && buildSrc.includes('跳到最新'))
 check('  未读分界文案在场', buildSrc !== null && buildSrc.includes('条未读'))
+// 真机反馈 2026-09-16：**抽屉**是第二个滚动容器（成员 12 人时要滚很久），
+// 旧实现只带内容区那一个 ⇒ 滚到中间看成员，下一次 4 秒轮询就跳回顶部。
+check('swap：抽屉的滚动位置也要带过去（两个独立滚动容器，各存各的）',
+  swapSrc !== null && swapSrc.includes('var drawerTop = old._drawer')
+  && swapSrc.indexOf('panel._drawer.scrollTop = drawerTop') > swapSrc.indexOf('old.replaceWith(panel)'),
+  swapSrc)
 const viewSrc = extractFunction(src, 'makeRoomView')
 check('副页（React 座位）重建也保住滚动位置',
   viewSrc !== null && viewSrc.includes('applyScrollAnchor(host, anchor)'))
