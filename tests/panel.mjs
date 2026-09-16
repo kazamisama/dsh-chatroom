@@ -46,6 +46,8 @@ const NAMES = [
   'unreadOf', 'scrollAnchorOf', 'applyScrollAnchor',
   // 「欠的是哪一条」（2026-09-14 真机 #1348：靶子只报最新那条，义务却会积压）
   'owedLabel', 'pendingRows',
+  // 停摆窗口（2026-09-16：计数与时长必须同一个窗口）
+  'recentJank',
 ]
 const missing = NAMES.filter((n) => extractFunction(src, n) === null)
 if (missing.length > 0) {
@@ -349,22 +351,31 @@ check('状态行把人数与上限一起说',
   buildSrc !== null && buildSrc.includes("+ '/' + room.room.policy.maxMembers + ' 名成员'"))
 
 console.log('16. 主线程停摆探针（真机 2026-09-14：界面侧间歇卡顿，而服务端 4-49ms、整机 12-36% 都健康）')
-check('探针记录停摆时长与时刻', src.includes('jankWorstMs = drift') && src.includes("clientLog('主线程停摆 '"))
+check('探针记录停摆时长与时刻', src.includes('jankLog.push({ at: now, ms: drift') && src.includes("clientLog('主线程停摆 '"))
 check('  只报 ≥600ms 的停摆（普通抖动不算）', src.includes('if (drift >= 600)'))
-check('  只认最近 5 分钟的（避免旧记录一直挂着）', src.includes('Date.now() - jankWorstAt < 5 * 60 * 1000'))
-check('  停摆进了自诊断那条（带次数与归因）',
-  src.includes("diagBits.push('停摆 ' + (jank / 1000).toFixed(1) + 's×' + jankCount") &&
-  src.includes("jankWorstMine === true ? '(重建中)' : '(非我)'"))
+check('  窗口由 recentJank 现算（不是靠"计数何时清零"）',
+  src.includes('function recentJank(log, at)') && src.includes('var cut = now - 5 * 60 * 1000'))
+check('  停摆进了自诊断那条（带**窗口内**次数与归因）',
+  src.includes("diagBits.push('停摆 ' + (jank.ms / 1000).toFixed(1) + 's×' + jank.count + '/5分'") &&
+  src.includes("jank.mine === true ? '(重建中)' : '(非我)'"))
 check('探针：只在**前台可见**时计停摆（webview 被挂起/节流也会拖后定时器，那是假象）',
-  src.includes('if (document.hidden === true) return') && src.includes('jankCount++'))
-check('  归因：停摆时我是不是正在重建面板', src.includes('jankWorstMine = renderInFlight === true'))
+  src.includes('if (document.hidden === true) return') && src.includes('jankTotal++'))
+check('  归因：停摆时我是不是正在重建面板', src.includes('mine: renderInFlight === true'))
 check('  重绘期间立旗（含早退路径都要放下）',
   src.includes('renderInFlight = true') && src.includes('renderInFlight = false'))
 check('面板轮询放到 4 秒（原来 2 秒）', src.includes('window.setInterval(refresh, 4000)'))
 check('  启动一次（apply 里，且有重入保护）',
   src.includes('if (jankProbeOn) return') && src.includes('startJankProbe()'))
 check('  由 createPanel 读它（面板一开就能看到）',
-  src.includes('var jank = recentJankMs()'))
+  src.includes('var jank = recentJank(jankLog)'))
+// 2026-09-16 修：旧写法把**自页面加载以来累计**的次数，和**受 5 分钟窗口约束**的时长
+// 摆在同一个"×N"里显示（clientLog 里甚至直接写着"最近 5 分钟第 N 次"）。
+// 我自己读用户发的截图时就被它带偏过一次 —— 诊断数字口径不一致比没有诊断更糟。
+check('计数与时长必须同窗口（旧写法混了两个窗口）',
+  !src.includes('jankCount') && !src.includes('jankWorstMs') && !src.includes('recentJankMs'))
+check('  并且带上"最近一次是什么时候"（回答"还在发生吗"）', src.includes("+ ' · ' + ago(jank.at)"))
+check('  累计值降级到悬停提示（"新问题还是老问题"是另一个问题）',
+  src.includes("warnEl.title = '自本页加载以来共 ' + jankTotal"))
 
 console.log('17. 打字让路（真机 2026-09-14 用户自测：关掉聊天室窗口后延迟消失）')
 check('识别"用户正对着输入框"', src.includes('function userIsTyping()') &&
@@ -390,7 +401,8 @@ check('  重绘：render() 自己计时（含早退路径也不至于记脏数�
 check('  rpc：量 state 的客户端往返', src.includes('var diagRpcT0 = performance.now()'))
 check('  只认最近 5 分钟', src.includes('Date.now() - 5 * 60 * 1000'))
 check('  头部只在异常时出现（重绘 ≥100ms / 拉取 ≥500ms / 停摆 ≥600ms）',
-  src.includes("if (diagRepaint >= 100)") && src.includes("if (diagRpc >= 500)") && src.includes("if (jank >= 600)"))
+  src.includes("if (diagRepaint >= 100)") && src.includes("if (diagRpc >= 500)")
+  && src.includes("if (jank.count > 0 && jank.ms >= 600)"))
 
 console.log('19. 「欠一次表态」必须说清是哪一条（真机 #1348：只报靶子会把旧账吞掉）')
 // 场景与真机一致：人的发言让全体欠回执 → 有人回了 → 一条只 @ 了别人的消息把靶子挪走。
@@ -439,6 +451,26 @@ check('宿主没重启（没有 pendingDetail）→ 退回旧的只报人',
   JSON.stringify(api.pendingRows({ targetSeq: 3, pending: ['session-eeeeeeee-1'] })) === '{"target":["eeeeeeee"],"older":[]}',
   api.pendingRows({ targetSeq: 3, pending: ['session-eeeeeeee-1'] }))
 check('空房间不炸', api.pendingRows(null).target.length === 0)
+
+console.log('20. recentJank —— 停摆的次数与时长必须是同一个窗口（2026-09-16 修的诊断谎言）')
+const nowMs = Date.now()
+const jk = (msAgo, ms, mine) => ({ at: nowMs - msAgo, ms: ms, mine: mine })
+check('窗口内计数', api.recentJank([jk(1000, 2000, true), jk(2000, 900, false)], nowMs).count === 2,
+  api.recentJank([jk(1000, 2000, true), jk(2000, 900, false)], nowMs))
+check('窗口外的不算（旧记录不许一直挂着）',
+  api.recentJank([jk(6 * 60000, 20000, true), jk(1000, 800, false)], nowMs).count === 1,
+  api.recentJank([jk(6 * 60000, 20000, true), jk(1000, 800, false)], nowMs))
+check('取窗口内**最坏**那次，不是最后一次',
+  api.recentJank([jk(1000, 700, false), jk(2000, 9000, true)], nowMs).ms === 9000,
+  api.recentJank([jk(1000, 700, false), jk(2000, 9000, true)], nowMs))
+check('  归因跟着最坏那次走（不是"最后一次的归因"）',
+  api.recentJank([jk(1000, 700, false), jk(2000, 9000, true)], nowMs).mine === true)
+check('  并给出它发生的时刻（面板显示"几分钟前"）',
+  api.recentJank([jk(120000, 5000, false)], nowMs).at === nowMs - 120000)
+check('全是旧记录 → 计数 0（整块消失，而不是挂着一个陈年数字）',
+  api.recentJank([jk(10 * 60000, 17000, false)], nowMs).count === 0)
+check('空日志 / undefined 不炸',
+  api.recentJank([], nowMs).count === 0 && api.recentJank(undefined, nowMs).ms === 0)
 
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
