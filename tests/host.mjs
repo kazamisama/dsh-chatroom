@@ -535,6 +535,37 @@ const noneLine = owNone.text.split('\n').find((l) => l.includes('eeeeffff')) || 
 check('  room_owners 那句写清了是哪条通道',
   noneLine.includes('普通发言') && noneLine.includes('声明正文里的 @ 不算'), noneLine)
 
+console.log('8.67c 唤醒席 watch=wake —— 会被叫醒，但**不登记义务**（真机 #1920，用户提的需求）')
+// 三根轴（推不推 × 叫不叫醒 × 要不要回）里唯一还没落地的角：`all` 把「叫醒」与「必须回」绑成了一件事，
+// 于是自动审计席只有两难 —— 每小时被叫 26 次且每次必回（回执很快退化成走过场），或者一次都不醒。
+const wakeIntent = await tool('room_intent').execute(
+  { room: bRoomId, direction: '自动审计席：醒过来看一眼就行，不必写话', watch: 'wake' }, exec(E))
+check('room_intent 接受 watch=wake，并说清「会叫醒 / 不登记义务」',
+  wakeIntent.text.includes('唤醒席') && wakeIntent.text.includes('不登记回执义务'), wakeIntent.text)
+let eWake = callsOf(E).length
+const declWake = await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/whatever.py'], summary: '唤醒席试一次' }, exec(A))
+const wakeCalls = callsOf(E).slice(eWake)
+check('  被**叫醒**了（followup，而不是背景 inject）',
+  wakeCalls.some((c) => c.mode === 'followup'), wakeCalls.map((c) => c.mode))
+const wakeFrame = ((wakeCalls.find((c) => c.mode === 'followup') || {}).message || { content: [{ text: '' }] }).content[0].text
+check('  帧里**明说不用回**，且**没有**「你必须回一句」',
+  wakeFrame.includes('不要求回执') && !wakeFrame.includes('你必须回一句'), wakeFrame.slice(0, 220))
+const owWake = await tool('room_owners').execute({ room: bRoomId, paths: ['ulysses/whatever.py'], workspace: 'D:\\proj' }, exec(A))
+const wakeLine = owWake.text.split('\n').find((l) => l.includes('eeeeffff')) || ''
+check('  room_owners 单列一桶「会唤醒但**不必回**」',
+  owWake.text.includes('会唤醒但**不必回**（1 人') && wakeLine.includes('不登记回执义务'), owWake.text)
+const stWakeLine = (await tool('room_status').execute({ room: bRoomId }, exec(A))).text.split('\n').find((l) => l.includes('eeeeffff')) || ''
+check('  room_status 单列一档', stWakeLine.includes('唤醒席（变更全推 + 会叫醒，但不必回执）'), stWakeLine)
+// **对照**：同一个情形换成 all ⇒ 拿到的帧必须带「你必须回一句」（否则这一档就白加了）
+await tool('room_intent').execute({ room: bRoomId, direction: '审计席：每条都回', watch: 'all' }, exec(E))
+eWake = callsOf(E).length
+await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/whatever.py'], summary: '对照：all 档' }, exec(A))
+const allFrame = ((callsOf(E).slice(eWake).find((c) => c.mode === 'followup') || {}).message || { content: [{ text: '' }] }).content[0].text
+check('  对照：all 档同一情形**必须回**', allFrame.includes('你必须回一句'), allFrame.slice(0, 200))
+// 复原成 none —— 后面的 8.7/8.75 按「它是不叫醒的席位」写断言。
+await tool('room_intent').execute({ room: bRoomId, direction: '静音席（不收变更）', watch: 'none' }, exec(E))
+void declWake
+
 console.log('8.68 成员边界进**自己的** system prompt（真机 #1732）')
 // 起点：方向此前只活在房间侧 + 被叫醒那一帧的帧尾 ⇒ 自己开工 / 用户直接对话 / 新窗口第一轮都看不到自己的边界。
 // 做法：把一条 section 注册进**这个 agent 自己的作用域**，且 text() 每次组装现算。
@@ -580,7 +611,7 @@ await tool('room_intent').execute({
 
 console.log('8.7 room_owners：动手之前查边界，且与唤醒判定同源')
 const owners = await tool('room_owners').execute({ room: bRoomId, paths: ['ulysses/app.py'], workspace: 'D:\\proj' }, exec(A))
-check('列出会唤醒的人', owners.text.includes('会唤醒（0 人') || owners.text.includes('会唤醒（1 人'), owners.text)
+check('列出会唤醒的人', owners.text.includes('会唤醒**且要回**（0 人') || owners.text.includes('会唤醒**且要回**（1 人'), owners.text)
 check('  没给结构化边界的人带原因，且说明"自己声明不会叫醒自己"',
   owners.text.includes('没给结构化边界 → 回落「同工作区即相关」')
   && owners.text.includes('自己声明不会叫醒自己'), owners.text)
@@ -591,12 +622,12 @@ check('  命中它声明「不碰」的路径 → 进"不会被唤醒"并给原�
 // 换一个真属于 B 的路径：它该出现在会唤醒名单，并提示先 @ 负责人
 const owners3 = await tool('room_owners').execute({ room: bRoomId, paths: ['ulysses/web/other.js'], workspace: 'D:\\proj' }, exec(A))
 check('  命中它的边界 → 进"会唤醒"并提示先 @ 负责人',
-  owners3.text.includes('会唤醒（1 人') && owners3.text.includes('1b68df32') && owners3.text.includes('别悄悄改'), owners3.text)
+  owners3.text.includes('会唤醒**且要回**（1 人') && owners3.text.includes('1b68df32') && owners3.text.includes('别悄悄改'), owners3.text)
 // **同源检查**：查询说会叫醒谁，room_declare_change 就真叫醒谁（同一个函数，不许两张表各说各话）
 b0 = callsOf(B).length
 await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/web/other.js'], summary: '同源核对' }, exec(A))
 check('  同源：查询说会叫醒 1 人（B），声明就真的只叫醒 1 人',
-  owners3.text.includes('会唤醒（1 人') && wakesOf(B, b0) === 1, { owner: owners3.text.split('\n')[1], woke: wakesOf(B, b0) })
+  owners3.text.includes('会唤醒**且要回**（1 人') && wakesOf(B, b0) === 1, { owner: owners3.text.split('\n')[1], woke: wakesOf(B, b0) })
 
 console.log('8.75 成员工作区：**未知 ≠ 不在**（真机 #1756 —— 同一个提问、两次相反的答案）')
 // 真机：`room_owners(paths=["ulysses/app.py"])` 23:57 说「会唤醒 0 人」、00:06 说 3 人，参数一字未改。
@@ -633,7 +664,7 @@ check('③ 已核对确实在别的仓库 ⇒ 仍然不误伤', lineOf176(DORMAN
 check('  表尾有 ⚠ 汇总（别把「取不到」读成「没人负责」）',
   ow176.text.includes('工作区**取不到**'), ow176.text.split('\n').slice(-1)[0])
 check('  查询说会唤醒 2 人（F 与 C；A 是调用者自己、B 不命中、E 是静音席）',
-  ow176.text.includes('会唤醒（2 人'), ow176.text.split('\n')[1])
+  ow176.text.includes('会唤醒**且要回**（2 人'), ow176.text.split('\n')[1])
 // **同源**：查询说会叫醒谁，声明就真叫醒谁（同一个函数，不许两张表各说各话）—— 冷会话也在名单里。
 const w0 = callsOf(A).length
 const decl176 = await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/app.py'], summary: '同源核对（含冷会话）' }, exec(A))

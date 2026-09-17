@@ -468,7 +468,10 @@ console.log('22b. 观察者/静音席位 —— 收录范围与"有没有领地"
 m22 = await store.setSelfDescription(dRoom.id, A, '只读审计席，不认领任何路径', { watch: 'all' })
 check('watch=all 落库', m22.watch === 'all' && (m22.paths || []).length === 0, { watch: m22.watch, paths: m22.paths })
 check('  它**不需要** paths 也能表达收录范围', store.status(dRoom.id).members[0].watch === 'all')
-// **只收不答席**（真机 #1798）：两根轴（推不推 × 要不要每条都应一声）里缺的那个角。
+// **唤醒席**（真机 #1920）：三根轴（推不推 × 叫不叫醒 × 要不要回）里缺的那个角 —— 全推 + 叫醒 + 不必回。
+m22 = await store.setSelfDescription(dRoom.id, A, '自动审计席：醒过来看一眼就行，不必写话', { watch: 'wake' })
+check('watch=wake 落库（全推 + 会叫醒 + 不必回）', m22.watch === 'wake' && store.status(dRoom.id).members[0].watch === 'wake')
+// **只收不答席**（真机 #1798）：全推但**不叫醒**、也不产生义务。
 m22 = await store.setSelfDescription(dRoom.id, A, '安全审计席：要看得见，不必每条都应一声', { watch: 'feed' })
 check('watch=feed 落库（全推 + 不产生义务）', m22.watch === 'feed' && store.status(dRoom.id).members[0].watch === 'feed')
 m22 = await store.setSelfDescription(dRoom.id, A, '静音席', { watch: 'none' })
