@@ -154,6 +154,15 @@ check('多个 @ → 都命中', parseMentions('@aaaabbbb @审计员 一起看', 
 check('@ 到不存在的短号 → 不误伤', parseMentions('@deadbeef 在吗', ml).length === 0)
 check('没成员不炸', parseMentions('@aaaabbbb', undefined).length === 0)
 check('text 为 undefined 不炸', parseMentions(undefined, ml).length === 0)
+// **前缀命中**（真机 #1970 的同族，来自审计席自己的量具）：@ 后面的短号必须是**独立的一段**。
+// 这条通道的后果比「量具读错」重得多 —— 它会**唤醒一个成员**、登记「你必须回一句」的义务。
+check('更长 id 的前缀不算提及（@aaaabbbb9999）', parseMentions('@aaaabbbb9999 在吗', ml).length === 0)
+check('短号后紧跟字母也不算（@aaaabbbbX）', parseMentions('@aaaabbbbX 在吗', ml).length === 0)
+check('后面是标点 / 空格 / 行尾照旧算',
+  parseMentions('@aaaabbbb，请确认', ml).length === 1 && parseMentions('@aaaabbbb) 收尾', ml).length === 1
+  && parseMentions('就 @aaaabbbb', ml).length === 1, parseMentions('@aaaabbbb，请确认', ml).length)
+check('@allows 不算 @全体（同族的前缀命中）', parseMentions('@allows 这不是点名', ml).length === 0)
+check('@everyoneX 也不算', parseMentions('@everyoneX 这不是点名', ml).length === 0)
 
 console.log('13. 越界检测 —— 「别人负责的区域，别悄悄改」')
 const DIR_IMPL = '我负责 harness 回话管线（runaway 的输出上限补丁）与 WebUI 聊天区渲染（js/chat.js 的气泡真实性修复）；不碰同目录的 js/memory.js 与 dashboard.css。'
