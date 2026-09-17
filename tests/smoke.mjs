@@ -161,7 +161,18 @@ check('短号后紧跟字母也不算（@aaaabbbbX）', parseMentions('@aaaabbbb
 check('后面是标点 / 空格 / 行尾照旧算',
   parseMentions('@aaaabbbb，请确认', ml).length === 1 && parseMentions('@aaaabbbb) 收尾', ml).length === 1
   && parseMentions('就 @aaaabbbb', ml).length === 1, parseMentions('@aaaabbbb，请确认', ml).length)
+// **`-`/`_` 只对「词」算边界**（真机 #1982②/#1985① 量到、#1987 定案）：短号是一条 uuid 的前 8 位，
+// `-` 之后仍是**同一条 id** ⇒ 那两格对短号只制造漏报（列表形态会**静默丢掉前一个**）。
+check('短号后紧跟 `-` 仍算点名（@aaaabbbb-的领地）', parseMentions('@aaaabbbb-的领地', ml).length === 1,
+  parseMentions('@aaaabbbb-的领地', ml))
+check('列表形态 @a-@b → **两个**都要点到（旧行为丢前一个）',
+  JSON.stringify(parseMentions('@aaaabbbb-@ccccdddd 一起看', ml)) === JSON.stringify(['session-aaaabbbb-1111-2222', 'session-ccccdddd-2222-3333']),
+  parseMentions('@aaaabbbb-@ccccdddd 一起看', ml))
+check('而「词」的边界保留：@审计员-lead 不算点到审计员', parseMentions('@审计员-lead 这是另一个名字', ml).length === 0,
+  parseMentions('@审计员-lead 这是另一个名字', ml))
 check('@allows 不算 @全体（同族的前缀命中）', parseMentions('@allows 这不是点名', ml).length === 0)
+check('「词」的边界也保留：@all-hands 不算喊全体（收掉的话代价是叫醒全房间）',
+  parseMentions('@all-hands 这是频道名', ml).length === 0, parseMentions('@all-hands 这是频道名', ml))
 check('@everyoneX 也不算', parseMentions('@everyoneX 这不是点名', ml).length === 0)
 
 console.log('13. 越界检测 —— 「别人负责的区域，别悄悄改」')
