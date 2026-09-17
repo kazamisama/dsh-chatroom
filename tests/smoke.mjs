@@ -243,6 +243,22 @@ const owedAfter = store.obligors(room.id, mOwed.seq).map((m) => m.sessionId)
 check('B 表态后不再欠', owedAfter.length === activeNow - 1 && !owedAfter.includes(B), owedAfter.map(shortId))
 check('judgedBy 能查出谁表过态', store.judgedBy(room.id, mOwed.seq).includes(B), store.judgedBy(room.id, mOwed.seq).map(shortId))
 
+console.log('15b. **作者撤回** —— 「事后销账」有机器动作（真机 #2131③）')
+// 房间本来就有「作者说了不用回就不用回」，但那两个机制（wake=false 与正文标记）只在**发送时**抑制；
+// 义务一旦登记，事后没有机器动作能销它 ⇒ 目标只能白花一轮去 judge 一条早就作废的消息。
+const mRetract = await store.appendMessage({ roomId: room.id, sender: { sessionId: A }, kind: 'free', body: '@' + shortId(B) + ' 你看下这条' , mentions: [B] })
+check('撤回前：被点到的人欠它', store.obligors(room.id, mRetract.seq).length === 1,
+  store.obligors(room.id, mRetract.seq).map((m) => shortId(m.sessionId)))
+const rNotAuthor = await store.retract(room.id, mRetract.seq, B)
+check('非作者撤不动（明确拒绝，不静默）', rNotAuthor.ok === false && rNotAuthor.reason === 'not-author', rNotAuthor)
+const rMissing = await store.retract(room.id, 999999, A)
+check('房间里没有这条 → 也说清楚', rMissing.ok === false && rMissing.reason === 'no-such-message', rMissing)
+const rOk = await store.retract(room.id, mRetract.seq, A)
+check('作者撤回成立，并回答「销掉了谁」', rOk.ok === true && rOk.already === false && rOk.cleared.length === 1, rOk)
+check('撤回后那条不再向任何人要回执', store.obligors(room.id, mRetract.seq).length === 0)
+const rAgain = await store.retract(room.id, mRetract.seq, A)
+check('幂等：重复撤回不报错', rAgain.ok === true && rAgain.already === true, rAgain)
+
 console.log('16. 引述即提及 —— 引述里的 @ 不算，自己也不 @ 自己（真机 #58 报的）')
 const mm = [
   { sessionId: 'session-4025aaaa-1111', roleName: '前端' },

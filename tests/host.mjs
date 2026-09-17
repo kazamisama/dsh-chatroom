@@ -671,6 +671,30 @@ const decl176 = await tool('room_declare_change').execute({ room: bRoomId, files
 check('  同源：声明也叫醒 2 人（冷会话照样进名单）', decl176.text.includes('已唤醒 2 名'), decl176.text)
 void w0
 
+console.log('8.95 **作者撤回** —— 事后销账（真机 #2131③）')
+// 背景：@ 被抑制后重发成新 seq，原 seq 的债会永久留在旧账里；目标只能白花一轮去 judge 它。
+// 现在给作者一个机器动作：room_say({ retracts: [seq] })。
+const rc = await rpc('create-room', { name: '撤回' })
+const rcId = rc.value.room.room.id
+await rpc('join', { roomId: rcId, sessionId: A.id })
+await rpc('join', { roomId: rcId, sessionId: B.id })
+const said0 = await tool('room_say').execute({ room: rcId, text: '@1b68df32 你看一下这条' }, exec(A))
+let rcSt = await tool('room_status').execute({ room: rcId }, exec(A))
+check('@ 到的人欠这条', rcSt.text.includes('待表态（靶子 #' + said0.seq + '）') && rcSt.text.includes('1b68df32'),
+  rcSt.text.split('\n').filter((l) => l.includes('待表态')).join(' | '))
+const bWake0 = callsOf(B).length
+const badRetract = await tool('room_say').execute({ room: rcId, text: '我想撤掉别人的', retracts: [said0.seq], wake: false }, exec(B))
+check('非作者撤不动（明确拒绝，不静默）', badRetract.text.includes('没撤回') && badRetract.text.includes('不是你发的'), badRetract.text)
+void bWake0
+const goodRetract = await tool('room_say').execute({ room: rcId, text: '刚才那条作废', retracts: [said0.seq], wake: false }, exec(A))
+check('作者撤回：返回里说清销了哪条', goodRetract.text.includes('已撤回 #' + said0.seq + ' 的义务'), goodRetract.text)
+// 作者自己收不到自己那条（fanout 跳过作者）、B 是 quiet 档也只走「拉」⇒ 从房间里读它。
+const stored = await tool('room_message').execute({ room: rcId, seq: goodRetract.seq }, exec(A))
+check('  正文带机器标记（别人不用去猜散文）',
+  stored.text.indexOf('〔已撤回 #' + said0.seq + ' 的义务') >= 0, stored.text.replace(/\s+/g, ' ').slice(0, 160))
+rcSt = await tool('room_status').execute({ room: rcId }, exec(A))
+check('撤回后那条从账上消失', !rcSt.text.includes('靶子 #' + said0.seq), rcSt.text.split('\n').slice(-2).join(' | '))
+
 console.log('8.8 人的发言也能定向（P5）与边界的可视化（P6）')
 // 不 @ → 全体（D4 不变）；@ 了 → 只有被点的人欠回执
 let hum = await rpc('say', { roomId: bRoomId, text: '全体都看一下' })
