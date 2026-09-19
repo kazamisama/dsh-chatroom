@@ -695,6 +695,17 @@ check('  正文带机器标记（别人不用去猜散文）',
 rcSt = await tool('room_status').execute({ room: rcId }, exec(A))
 check('撤回后那条从账上消失', !rcSt.text.includes('靶子 #' + said0.seq), rcSt.text.split('\n').slice(-2).join(' | '))
 
+console.log('8.96 通配直觉的**静默失效**要当场喊一声（真机 #3169）')
+// `*`/`?` 不是通配符：写成 `ulysses/web/*.js` 会按**字面前缀**匹配 ⇒ 永远不命中、且此前毫无提示。
+// 喊出来的位置选在 room_intent 的返回里 —— 声明者当场就能改，不用等一次误唤醒之后才发现。
+const globIntent = await tool('room_intent').execute(
+  { room: rcId, direction: '测试：排除用通配直觉写法', excludes: ['ulysses/web/*.js'], watch: 'quiet' }, exec(A))
+check('点出「像通配却永不命中」的条目',
+  globIntent.text.includes('不是通配符') && globIntent.text.includes('ulysses/web/*.js'), globIntent.text)
+const cleanIntent = await tool('room_intent').execute(
+  { room: rcId, direction: '测试：正常写法', excludes: ['ulysses/web/**'], watch: 'quiet' }, exec(A))
+check('  正常写法（`**` 结尾）不喊', !cleanIntent.text.includes('不是通配符'), cleanIntent.text)
+
 console.log('8.8 人的发言也能定向（P5）与边界的可视化（P6）')
 // 不 @ → 全体（D4 不变）；@ 了 → 只有被点的人欠回执
 let hum = await rpc('say', { roomId: bRoomId, text: '全体都看一下' })

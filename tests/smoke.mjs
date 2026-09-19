@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   createChatroomStore, shortId, parseMentions, parseMentionsScoped, ownedPaths, detectOverreach, saysNoReply, VERDICTS,
-  structuredPaths, memberOwnership, matchesOwnedPath, cleanPathList, DIRECTION_MAX_CHARS,
+  structuredPaths, memberOwnership, matchesOwnedPath, suspectGlobs, cleanPathList, DIRECTION_MAX_CHARS,
 } from '../lib/rooms.js'
 
 const root = path.join(os.tmpdir(), 'dsh-chatroom-smoke-' + Date.now())
@@ -230,6 +230,12 @@ check('「不必表态」被认出来', saysNoReply('这条不必表态') === tr
 check('英文 no reply needed 被认出来', saysNoReply('FYI, no reply needed') === true)
 check('正常点名 → 不算免回执', saysNoReply('@1b68df32 请确认载荷') === false)
 check('半截词不误伤（「不必回滚」不是免回执）', saysNoReply('这个改动不必回滚，继续跑') === false)
+// 真机 #3169：字面表里没有带「你」的那一形，于是作者明说了不用回、插件照样登记了义务。
+check('「不需要**你**回应」也认（真机 #3169 的原话形状）',
+  saysNoReply('@1b68df32 这半不需要你回应，只登记一个事实') === true)
+check('  「不需要您再回复」也认', saysNoReply('不需要您再回复') === true)
+check('  「不必你表态」也认', saysNoReply('不必你表态') === true)
+check('  仍然不认半截词（「不必你回滚」不是免回执）', saysNoReply('不必你回滚这次部署') === false)
 check('空文本不炸', saysNoReply(undefined) === false)
 
 // ② 表态是终端的：已经表过态的人不再欠这条消息（否则投递层会把「你必须回一句」再送一次）
@@ -458,6 +464,19 @@ check('  paths 不是数组 → 报错（不静默当成空）', threw21 !== nul
 threw21 = null
 try { cleanPathList(Array.from({ length: 41 }, (_, i) => 'f' + i + '.py'), 'paths') } catch (err) { threw21 = String(err.message) }
 check('  超过 40 条 → 报错（它不是第二篇散文）', threw21 !== null && threw21.includes('最多 40 条'), threw21)
+
+// 真机 #3169：`*` / `?` **不是通配符** —— 按字面前缀匹配 ⇒ 写成 `a*.py` 会**静默**匹配不到任何东西。
+check('通配直觉写法确实不会命中（判据按字面前缀）',
+  matchesOwnedPath('tests/unit/test_webui_auth.py', structuredPaths(['tests/unit/test_webui_auth*.py'])) === null)
+check('  精确路径命中',
+  matchesOwnedPath('tests/unit/test_webui_auth.py', structuredPaths(['tests/unit/test_webui_auth.py'])) !== null)
+check('  目录前缀也命中（`tests/unit/`）',
+  matchesOwnedPath('tests/unit/test_webui_auth.py', structuredPaths(['tests/unit/'])) !== null)
+check('suspectGlobs 只挑出「看着像通配却永不命中」的条目',
+  JSON.stringify(suspectGlobs(['tests/unit/test_webui_auth*.py', 'ulysses/core/**', 'dashboard.css', 'tests/unit/']))
+  === JSON.stringify(['tests/unit/test_webui_auth*.py']),
+  suspectGlobs(['tests/unit/test_webui_auth*.py', 'ulysses/core/**', 'dashboard.css', 'tests/unit/']))
+check('  以 `**` 结尾的写法不算可疑', suspectGlobs(['a/**', 'b/*/c.py']).length === 1, suspectGlobs(['a/**', 'b/*/c.py']))
 
 const ownA = memberOwnership({ paths: ['ulysses/app.py'], selfDescription: '我负责 ulysses/web/** 的端点' })
 check('有结构化边界 ⇒ **只读它**，散文不再兜底（真机 #3122：散文里提到文件名 ≠ 声明了它）',
