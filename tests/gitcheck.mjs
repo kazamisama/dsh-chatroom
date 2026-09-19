@@ -23,6 +23,12 @@ async function git(cwd, args) {
   return stdout
 }
 
+/** 同一个 git，但能带环境变量 —— 用来造「很久以前提交」的文件（时间窗/锚点判据要它）。 */
+async function gitAt(cwd, args, env) {
+  const { stdout } = await run('git', ['-C', cwd, ...args], { windowsHide: true, env: { ...process.env, ...env } })
+  return stdout
+}
+
 const root = path.join(os.tmpdir(), 'dsh-chatroom-git-' + Date.now())
 const repo = path.join(root, 'repo')
 const plain = path.join(root, 'plain')
@@ -75,10 +81,20 @@ await git(repo, ['commit', '-q', '-m', 'add untouched'])
 // 锚点 = 本次会话开始时间。用"现在"表示"这些提交都发生在我这次会话之前"——
 // 没有锚点就不许判撒谎（宁可少判），所以这一段的每个 contradicted 都必须带锚点。
 const ANCHOR_NOW = Date.now()
-r = await verifyDeclaration({ workspace: repo, files: ['ghost.py'], anchorMs: ANCHOR_NOW })
-check('声明一个不存在的文件 → contradicted', r.verdict === 'contradicted', r)
+r = await verifyDeclaration({ workspace: repo, files: ['untouched.py'], anchorMs: ANCHOR_NOW })
+check('文件在仓库里、但没动过 → contradicted', r.verdict === 'contradicted', r)
 check('原因写明「查无改动」', r.reason === 'no-declared-file-shows-any-change', r.reason)
 check('描述含「与事实不符」', describeVerification(r).includes('与事实不符'), describeVerification(r))
+
+// 而「仓库里根本没有这个路径」是**另一档**（真机 2026-09-20 #3598/#3599）：
+// 从前它挤在上一档里，同一句话被读成"你没改"，而事实是"这里没有这个路径"——
+// 那是**假声明**那一档的措辞，一份诚实的跨仓声明会因此留下一条假红。
+r = await verifyDeclaration({ workspace: repo, files: ['ghost.py'], anchorMs: ANCHOR_NOW })
+check('声明一个仓库里没有的路径 → unverified（不是 contradicted）',
+  r.verdict === 'unverified' && r.reason === 'declared-files-not-in-repo', r)
+check('  逐文件标出 present=false', r.files[0].present === false, r.files[0])
+check('  描述明说「不是"没有改动"」', describeVerification(r).includes('不是"没有改动"'), describeVerification(r))
+check('  且**不用**撒谎档的措辞', !describeVerification(r).includes('与事实不符'), describeVerification(r))
 
 console.log('5. contradicted —— 部分对不上（多文件声明）')
 await fs.writeFile(path.join(repo, 'app.py'), 'def parse_cfg():\n    return 99\n', 'utf8')
@@ -146,8 +162,15 @@ check('证据标记 refCovers', rl.files[0].refCovers === true, rl.files[0])
 rl = await verifyDeclaration({ workspace: repo, files: ['during.py'], anchorMs: Date.now() + 60000, ref: 'deadbeefdeadbeef' })
 check('假的 ref 不算证据（仍 contradicted）', rl.verdict === 'contradicted', rl)
 
-rl = await verifyDeclaration({ workspace: repo, files: ['ghost.py'] })
-check('没有锚点 → unverified，绝不判撒谎', rl.verdict === 'unverified' && rl.reason === 'no-anchor-cannot-contradict', rl)
+// 「路径在、事实也在，只是没有基准」—— 这条必须留着（它和"这里没有这个路径"是两回事）。
+// 造一个**很久以前**提交的文件：近期提交会被 30 分钟时间窗兜底成证据，就测不到这一档了。
+await fs.writeFile(path.join(repo, 'old.py'), 'o = 1\n', 'utf8')
+await git(repo, ['add', 'old.py'])
+await gitAt(repo, ['commit', '-q', '-m', 'old work'],
+  { GIT_AUTHOR_DATE: '2020-01-01T00:00:00', GIT_COMMITTER_DATE: '2020-01-01T00:00:00' })
+rl = await verifyDeclaration({ workspace: repo, files: ['old.py'] })
+check('路径在、但没动过、又没有锚点 → unverified，绝不判撒谎',
+  rl.verdict === 'unverified' && rl.reason === 'no-anchor-cannot-contradict', rl)
 check('原因说清「没有锚点」', describeVerification(rl).includes('没有可用的时间锚点'), describeVerification(rl))
 
 console.log('10. 回溯：会话 cwd 是「几个仓库的父目录」时，事实该去哪问（真机 2026-09-12）')
@@ -350,6 +373,77 @@ check('一份声明横跨两个仓库 → 不回溯', rw2.fallback === false && 
 const rw3 = await resolveWorktree({ workspace: root, files: ['bRepo/src/x.py'] })
 check('父目录兜底那条第仍成立（bRepo/src/x.py → bRepo 仓）',
   path.normalize(rw3.workspace) === path.normalize(bRepo) && rw3.files.join() === 'src/x.py', rw3)
+
+console.log('12. 声明写成「兄弟仓名/仓内路径」（真机 2026-09-20 #3598/#3599：一份诚实声明连吃两次假红）')
+// 真机形状（照 store 里那两条 change 记录一比一复现）：会话 cwd = …\workspace\ulysses（是仓库），
+// 产出在隔壁 …\workspace\dsh-ulysses-mcp（另一个仓库），声明写成 dsh-ulysses-mcp/src/tools_verify.py。
+// 旧实现只做**词法**嵌套判断 ⇒「ulysses\dsh-ulysses-mcp\src\… 装得下」⇒ 声明被拿去 ulysses 仓核验
+// ⇒ ref 查不到（判「ref 无效」）、文件"无改动痕迹"（判「与事实不符」）。
+const sibHome = path.join(root, 'sib')
+const sibUl = path.join(sibHome, 'ulysses')
+const sibMcp = path.join(sibHome, 'dsh-ulysses-mcp')
+const sibOther = path.join(sibHome, 'other')
+await fs.mkdir(path.join(sibMcp, 'src'), { recursive: true })
+await fs.mkdir(path.join(sibMcp, 'tests'), { recursive: true })
+await fs.mkdir(path.join(sibOther, 'src'), { recursive: true })
+await fs.mkdir(sibUl, { recursive: true })
+const sibInit = async (dir, files) => {
+  await git(dir, ['init', '-q', '-b', 'main'])
+  await git(dir, ['config', 'user.email', 'test@example.com'])
+  await git(dir, ['config', 'user.name', 'test'])
+  for (const f of Object.keys(files)) await fs.writeFile(path.join(dir, f), files[f], 'utf8')
+  await git(dir, ['add', '.'])
+  await git(dir, ['commit', '-q', '-m', 'init'])
+}
+await sibInit(sibUl, { 'app.py': 'a = 1\n' })
+await sibInit(sibMcp, { 'src/tools_verify.py': 'v = 1\n', 'tests/test_verify_refusals.py': 't = 1\n' })
+await sibInit(sibOther, { 'src/z.py': 'z = 1\n' })
+// 产出：兄弟仓里那两个文件各改一次并提交（真机是 0ec11c3 那一个提交）
+await fs.writeFile(path.join(sibMcp, 'src', 'tools_verify.py'), 'v = 2\n', 'utf8')
+await fs.writeFile(path.join(sibMcp, 'tests', 'test_verify_refusals.py'), 't = 2\n', 'utf8')
+await git(sibMcp, ['add', '.'])
+await git(sibMcp, ['commit', '-q', '-m', 'fix(verify): 拒绝必须可读'])
+const mcpHead = (await git(sibMcp, ['rev-parse', '--short', 'HEAD'])).trim()
+
+const sibDecl = ['dsh-ulysses-mcp/src/tools_verify.py', 'dsh-ulysses-mcp/tests/test_verify_refusals.py']
+const sib = await resolveWorktree({ workspace: sibUl, files: sibDecl })
+check('声明的路径按**兄弟仓**定位（不是会话那个仓库）',
+  path.normalize(sib.workspace) === path.normalize(sibMcp) && sib.fallback === true, sib)
+check('  原因写明是「兄弟仓」', sib.reason === 'declared-files-in-sibling-worktree', sib.reason)
+check('  路径改写成该仓库内的相对路径',
+  sib.files.join() === 'src/tools_verify.py,tests/test_verify_refusals.py', sib.files)
+const sibV = await verifyDeclaration({ workspace: sib.workspace, files: sib.files, ref: mcpHead })
+check('  那个仓库里的 ref → 已证实（修复前：判「ref 无效 ⇒ 声明不成立」）',
+  sibV.verdict === 'verified' && sibV.refState === 'ok' && sibV.files.every((f) => f.refCovers === true), sibV)
+const sibText = describeVerification({ ...sibV, workspaceUsed: sibMcp, repoFallback: true, repoReason: sib.reason })
+check('  结论写明「git 事实取自哪个仓库、为什么」',
+  sibText.includes('git 事实取自 dsh-ulysses-mcp 仓库') && sibText.includes('兄弟仓'), sibText)
+const sibV2 = await verifyDeclaration({ workspace: sib.workspace, files: sib.files, anchorMs: Date.now() - 60000 })
+check('  不给 ref 时照样拿得到事实（提交在本会话开始之后）', sibV2.verdict === 'verified', sibV2)
+
+// 反向对照 1：会话仓自己**真的有**这些路径时，绝不去看兄弟仓（优先级不能被新规则打乱）
+const keepSelf = await resolveWorktree({ workspace: sibMcp, files: ['src/tools_verify.py'] })
+check('会话仓自己装得下时，路径一个字节都不改',
+  keepSelf.fallback === false && keepSelf.reason === 'session-workspace-is-worktree'
+  && keepSelf.files.join() === 'src/tools_verify.py', keepSelf)
+
+// 反向对照 2：不带头一段（不是"兄弟仓名/…"的形状）就不猜 —— "同名文件碰巧在别处"不算数
+const noHead = await resolveWorktree({ workspace: sibUl, files: ['src/tools_verify.py'] })
+check('不带头一段的路径 → 不猜（宁可判未证实）', noHead.fallback === false, noHead)
+
+// 反向对照 3：一份声明横跨两个兄弟仓 → 仍然不拼结论；而且提示要说清"在上一级目录下面"
+const cross = await resolveWorktree({ workspace: sibUl, files: ['dsh-ulysses-mcp/src/tools_verify.py', 'other/src/z.py'] })
+check('横跨两个兄弟仓 → 整份放弃（不拼两个仓库的结论）',
+  cross.fallback === false && cross.reason === 'declared-files-absent-from-session-workspace', cross)
+const crossText = describeVerification({
+  ...(await verifyDeclaration({ workspace: cross.workspace, files: cross.files, anchorMs: Date.now() - 60000 })),
+  workspaceUsed: sibUl,
+  nearMiss: cross.nearMiss,
+})
+check('  结论说「这些路径不在本仓库」', crossText.includes('不是"没有改动"'), crossText)
+check('  不说「与事实不符」', !crossText.includes('与事实不符'), crossText)
+check('  提示点名上一级目录下的两个兄弟仓',
+  crossText.includes('上一级目录') && crossText.includes('dsh-ulysses-mcp') && crossText.includes('other'), crossText)
 
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
