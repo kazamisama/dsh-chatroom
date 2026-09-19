@@ -827,8 +827,17 @@ check('  并把解析后的 workspace/files 交给 verifyDeclaration',
 // 把 `const stamp = rejudgeStamp()` 换成 `const stamp = 'v' + REJUDGE_VERSION` 之后，
 // 那些字符串**仍然全在**（定义还摆着，只是没人用），整套照样绿，而两段自动挡已经没了。
 // 所以接线那一行必须单独守；"值对不对"由 tests/gitcheck.mjs 第 14 节逐段独立算出来对账。
-check('  接线那一行真的调了 rejudgeStamp()（#3641 的变异 A）',
-  /const stamp = rejudgeStamp\(\)/.test(indexSrc), 'stamp 必须取自 rejudgeStamp()，不能是常量')
+//
+// #3646 的 A3 补上了这条绊线的一个缺口：在**同一作用域**里写 `const rejudgeStamp = () => 'v1'` 遮蔽导入，
+// 调用那一行的**文本一字不改** ⇒ 只看"文本在不在"的断言照样绿。
+// 顺带否掉一个更省的想法（"这个标识符出现次数 == 2"）：index.js 里本来就有一句注释提到它，
+// 计数版**当场就是错的**。文本绊线挡得住的是改名/内联/遮蔽这类现实改动，挡不住刻意构造的形状 ——
+// 这是它的固有边界，所以这里三件事一起查（调用文本 / 无本地同名定义 / 真的从 rejudge.js 导入）。
+check('  接线真的调 rejudgeStamp()，且没有本地同名遮蔽（#3646 的 A3）',
+  /const stamp = rejudgeStamp\(\)/.test(indexSrc)
+  && !/(?:const|let|var|function|class)\s+rejudgeStamp\b/.test(indexSrc)
+  && indexSrc.includes("import { REJUDGE_BATCH, rejudgeInputs, rejudgeStamp } from './rejudge.js'"),
+  '三者缺一不可：调用文本 / 无本地同名定义 / 真的从 rejudge.js 导入')
 check('  按**判据指纹**盖章，不取「前 20 条」（否则新假红会被前面的堵死）',
   indexSrc.includes('.filter((c) => c.rejudgedUnder !== stamp)'),
   '那条 filter 缺了就等于没盖章')
