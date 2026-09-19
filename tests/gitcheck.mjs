@@ -431,6 +431,12 @@ check('会话仓自己装得下时，路径一个字节都不改',
 const noHead = await resolveWorktree({ workspace: sibUl, files: ['src/tools_verify.py'] })
 check('不带头一段的路径 → 不猜（宁可判未证实）', noHead.fallback === false, noHead)
 
+// 反向对照 2b：路径**在仓库外**（写成 ../ 或绝对路径）时，"磁盘上有"不算"这个仓库里有"
+const outDecl = await verifyDeclaration({ workspace: sibUl, files: ['../dsh-ulysses-mcp/src/tools_verify.py'], anchorMs: Date.now() + 60000 })
+check('路径落在仓库外面 → unverified（不是"无改动痕迹"）',
+  outDecl.verdict === 'unverified' && outDecl.reason === 'declared-files-not-in-repo', outDecl)
+check('  逐文件 present=false（磁盘上存在 ≠ 这个仓库里有）', outDecl.files[0].present === false, outDecl.files[0])
+
 // 反向对照 3：一份声明横跨两个兄弟仓 → 仍然不拼结论；而且提示要说清"在上一级目录下面"
 const cross = await resolveWorktree({ workspace: sibUl, files: ['dsh-ulysses-mcp/src/tools_verify.py', 'other/src/z.py'] })
 check('横跨两个兄弟仓 → 整份放弃（不拼两个仓库的结论）',
