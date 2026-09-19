@@ -800,9 +800,13 @@ const rejudgeEnd = indexSrc.indexOf('for (const change of store.state.changes)',
 // 退回"到文件末尾"是安全的：窗口只会变宽，而变宽只可能让 includes 更容易成立。
 check('  重判路径的结尾锚点还在（结构变了要红，别让窗口被悄悄截断）', rejudgeEnd > rejudgeStart, { rejudgeStart, rejudgeEnd })
 const rejudgeBlock = indexSrc.slice(rejudgeStart, rejudgeEnd > rejudgeStart ? rejudgeEnd : indexSrc.length)
+// 判定输入的装配（锚点 / ref / 路由）现在住在一个**具名函数**里 —— 这样它的源码才能进重判的章
+// （837e0518 #3638②），而循环体只负责"拿输入、调一回、盖章"。所以这三条要对着**它**看。
+const inputsAt = indexSrc.indexOf('async function rejudgeInputs(change, starts)')
+const inputsBlock = indexSrc.slice(inputsAt, inputsAt + 1600)
 check('重判路径先按声明文件定位仓库',
-  rejudgeBlock.includes('await resolveWorktree({ workspace: change.workspaceId'),
-  rejudgeBlock.slice(0, 160))
+  inputsBlock.includes('await resolveWorktree({ workspace: change.workspaceId'),
+  inputsBlock.slice(0, 200))
 // 只收 contradicted 会漏掉**假阴性**（未证实）—— 那条 bug 把它判成「不在 git 仓库内」，
 // 而它不会被任何东西自愈（我自己那条 #1472 就是这么留下来的，2026-09-16）
 check('  重判同时收「与事实不符」与「未证实」两类',
@@ -812,24 +816,30 @@ check('  「从什么改成什么」的 former 在改写前读（否则会写出
   rejudgeBlock.includes("const from = change.verdict === 'unverified' ? '未证实' : 'contradicted'"),
   rejudgeBlock.slice(0, 260))
 check('  并把解析后的 workspace/files 交给 verifyDeclaration',
-  rejudgeBlock.includes('workspace: resolved.workspace,') && rejudgeBlock.includes('files: resolved.files,'),
-  rejudgeBlock.slice(0, 200))
+  inputsBlock.includes('workspace: resolved.workspace,') && inputsBlock.includes('files: resolved.files,')
+  && rejudgeBlock.includes('await verifyDeclaration(inputs)'),
+  inputsBlock.slice(0, 200))
 // 判据版本（2026-09-20 自查出来的）：队列以前取「前 20 条」，而**判对了的红**永远留在队列里 ⇒
 // 队列只涨不落：超过 20 条之后，一条排在末尾的**新假红**再也轮不到重判 —— 自愈就静默失效了
 // （真机当天量到 12 条，只剩 8 格）。
 check('  按**判据指纹**盖章，不取「前 20 条」（否则新假红会被前面的堵死）',
-  indexSrc.includes('const rejudgeStamp = () => criteriaFingerprint()')
-  && indexSrc.includes('.filter((c) => c.rejudgedUnder !== stamp)'),
+  indexSrc.includes('const rejudgeStamp = () =>') && indexSrc.includes('.filter((c) => c.rejudgedUnder !== stamp)'),
   '判据指纹与那条 filter 缺一不可')
-// 837e0518 #3634③：章若是"手工 +1 的常量"，忘 +1 就是自愈**静默**失效且没有读数会提示。
-// 现在章是**算出来的**（judge 指纹），手工版本号只在读不到源码时兜底。
-check('  章是算出来的，不是手工 +1 的常量（忘 +1 = 静默失效）',
-  indexSrc.includes("criteriaFingerprint() || ('v' + REJUDGE_VERSION)")
-  && indexSrc.includes('criteriaFingerprint, VERIFIED }'),
-  indexSrc.slice(indexSrc.indexOf('const rejudgeStamp'), indexSrc.indexOf('const rejudgeStamp') + 240))
+// 837e0518 #3634③ + #3638②：章若只是"手工 +1 的常量"就会忘；而只盖 lib/gitcheck.js 又漏掉
+// index.js 这边装配的判据（锚点 / ref / 路由 —— #1454/#1458 修的**正是**这里）。
+// 所以章是**复合**的：两段自动挡（gitcheck 字节 + rejudgeInputs 源码）+ 一段手工挡（兜底/扳机）。
+check('  章是算出来的（两段自动挡 + 一段手工挡）',
+  indexSrc.includes("(criteriaFingerprint() || 'g0')") && indexSrc.includes('assemblyFingerprint()')
+  && indexSrc.includes("+ '|v' + REJUDGE_VERSION"),
+  indexSrc.slice(indexSrc.indexOf('const rejudgeStamp'), indexSrc.indexOf('const rejudgeStamp') + 260))
+check('  自动挡覆盖 index.js 那边的判据：锚点/ref/路由都在 rejudgeInputs 里，它的源码进指纹',
+  inputsAt > 0 && inputsBlock.includes('resolveWorktree({ workspace: change.workspaceId')
+  && inputsBlock.includes("ref: typeof change.ref === 'string'")
+  && indexSrc.includes('String(rejudgeInputs)'),
+  { inputsAt })
 check('  翻没翻都盖章（判据没变就不必把同样的 git 再跑一遍）',
   rejudgeBlock.includes('change.rejudgedUnder = stamp'), rejudgeBlock.slice(0, 400))
-const anchorSkip = rejudgeBlock.indexOf('typeof anchorMs !==')
+const anchorSkip = rejudgeBlock.indexOf('if (inputs === null) continue')
 const stampAt = rejudgeBlock.indexOf('change.rejudgedUnder = stamp')
 check('  拿不到锚点时**不盖章**（会话表可能还没挂载完，下次还要再试）',
   anchorSkip >= 0 && stampAt > anchorSkip && !rejudgeBlock.slice(anchorSkip, stampAt).includes('rejudgedUnder'),
