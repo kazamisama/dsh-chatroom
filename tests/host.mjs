@@ -791,8 +791,11 @@ console.log('11. 源码绊线：历史重判必须走**同一套**仓库路由�
 // 它抓的形状很具体 —— 重判路径直接拿 change.workspaceId（上一次核验的答案）去解析 ref，
 // 于是"交付物在旁仓"的声明永远重判不回来（真机 2026-09-16 #1454/#1458）。
 const indexSrc = await fs.readFile(new URL('../lib/index.js', import.meta.url), 'utf8')
-const rejudgeBlock = indexSrc.slice(indexSrc.indexOf('for (const change of pending)'),
-  indexSrc.indexOf('for (const change of pending)') + 1500)
+// 窗口用**下一个循环**当结尾，不再是一个固定字数：这段代码会继续长，而字数上限会静默地
+// 把后面那些行挤出窗口 —— 真机上就是这么把「former 在改写前读」那条绊线打红的（2026-09-20）。
+const rejudgeStart = indexSrc.indexOf('for (const change of pending)')
+const rejudgeEnd = indexSrc.indexOf('for (const change of store.state.changes)', rejudgeStart)
+const rejudgeBlock = indexSrc.slice(rejudgeStart, rejudgeEnd > rejudgeStart ? rejudgeEnd : rejudgeStart + 2400)
 check('重判路径先按声明文件定位仓库',
   rejudgeBlock.includes('await resolveWorktree({ workspace: change.workspaceId'),
   rejudgeBlock.slice(0, 160))
@@ -807,6 +810,23 @@ check('  「从什么改成什么」的 former 在改写前读（否则会写出
 check('  并把解析后的 workspace/files 交给 verifyDeclaration',
   rejudgeBlock.includes('workspace: resolved.workspace,') && rejudgeBlock.includes('files: resolved.files,'),
   rejudgeBlock.slice(0, 200))
+// 判据版本（2026-09-20 自查出来的）：队列以前取「前 20 条」，而**判对了的红**永远留在队列里 ⇒
+// 队列只涨不落：超过 20 条之后，一条排在末尾的**新假红**再也轮不到重判 —— 自愈就静默失效了
+// （真机当天量到 12 条，只剩 8 格）。
+check('  按**判据版本**盖章，不取「前 20 条」（否则新假红会被前面的堵死）',
+  indexSrc.includes('const REJUDGE_VERSION')
+  && indexSrc.includes('.filter((c) => c.rejudgedUnder !== REJUDGE_VERSION)'),
+  'REJUDGE_VERSION 与那条 filter 缺一不可')
+check('  翻没翻都盖章（判据没变就不必把同样的 git 再跑一遍）',
+  rejudgeBlock.includes('change.rejudgedUnder = REJUDGE_VERSION'), rejudgeBlock.slice(0, 400))
+const anchorSkip = rejudgeBlock.indexOf('typeof anchorMs !==')
+const stampAt = rejudgeBlock.indexOf('change.rejudgedUnder = REJUDGE_VERSION')
+check('  拿不到锚点时**不盖章**（会话表可能还没挂载完，下次还要再试）',
+  anchorSkip >= 0 && stampAt > anchorSkip && !rejudgeBlock.slice(anchorSkip, stampAt).includes('rejudgedUnder'),
+  { anchorSkip, stampAt })
+check('  一批用满额度就不收工（留给下一次 tick，不让后面的记录饿死）',
+  rejudgeBlock.includes('if (examined >= REJUDGE_BATCH) break')
+  && indexSrc.includes('examined < REJUDGE_BATCH'), rejudgeBlock.slice(0, 160))
 
 console.log('12. state 不在请求路径上取标题（真机 2026-09-16：往返中位 890ms，而插件自身只要 15ms）')
 // 真机读数：候选 中位894ms/14KB 与 拉取 中位890ms 几乎相等、载荷差 14 倍 ⇒ 不是载荷、不是处理器；
