@@ -460,7 +460,23 @@ try { cleanPathList(Array.from({ length: 41 }, (_, i) => 'f' + i + '.py'), 'path
 check('  超过 40 条 → 报错（它不是第二篇散文）', threw21 !== null && threw21.includes('最多 40 条'), threw21)
 
 const ownA = memberOwnership({ paths: ['ulysses/app.py'], selfDescription: '我负责 ulysses/web/** 的端点' })
-check('结构化 + 散文合并成一份边界', ownA.owned.length === 2 && ownA.structured === true, ownA.owned.map((x) => x.token))
+check('有结构化边界 ⇒ **只读它**，散文不再兜底（真机 #3122：散文里提到文件名 ≠ 声明了它）',
+  ownA.owned.length === 1 && ownA.structured === true, ownA.owned.map((x) => x.token))
+check('  散文那份仍然留着（只用来写理由 / 催它补 paths，不参与判定）',
+  ownA.proseOwned.length === 1, ownA.proseOwned.map((x) => x.token))
+// 真机 #3122 的复现：`store.py` 出现在一句**规矩**里，不是领土声明
+const mouthful = memberOwnership({
+  paths: ['ulysses/core/**'],
+  selfDescription: 'store.py 的 schema/DDL 是全仓依赖面，改动前必须先在房间广播。',
+})
+check('那句散文不再把 store.py 算成它的地盘（⚠ 的假阳性来源）',
+  matchesOwnedPath('tests/runtime/memory/test_stream_fill_real_store.py', mouthful.owned) === null,
+  mouthful.owned.map((x) => x.token))
+check('  而同一个文件对**没给 paths** 的成员仍按散文命中（兜底那条路没被砍）',
+  matchesOwnedPath('tests/runtime/memory/test_stream_fill_real_store.py',
+    memberOwnership({ selfDescription: 'store.py 的 schema/DDL 归我' }).owned) !== null)
+check('  正负一起只看机器那份：有 paths 时散文里的「不碰」也不参与',
+  memberOwnership({ paths: ['ulysses/core/**'], excludes: [], selfDescription: '不碰 dashboard.css' }).excluded.length === 0)
 const ownB = memberOwnership({ selfDescription: '不碰 dashboard.css；负责 ulysses/app.py' })
 check('散文里的否定进 excluded（legacy 那条路仍要工作）',
   ownB.excluded.length === 1 && ownB.owned.length === 1 && ownB.structured === false,
