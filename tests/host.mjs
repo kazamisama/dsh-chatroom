@@ -13,6 +13,7 @@ const HOME = path.join(os.tmpdir(), 'dsh-chatroom-host-' + Date.now())
 process.env.DSH_CHATROOM_HOME = HOME
 
 const { apply, inject, name } = await import('../lib/index.js')
+const { rejudgeStamp } = await import('../lib/rejudge.js')
 
 let pass = 0
 let fail = 0
@@ -145,7 +146,39 @@ const ctx = {
   inject: (deps, cb) => { if (deps.includes('connection')) cb({ connection: connectionService }) },
 }
 
+// 预置一条 pending 记录：**重判的盖章必须落盘**（真机 2026-09-20 照出来的洞 —— 只盖在内存里，
+// 磁盘上一条都没有，于是每次启动都把同一批 pending 白验一遍）。这条记录用一个不存在的房间 id，
+// 免得它出现在任何按房间聚合的读法里。
+const SEED_CHANGE = {
+  id: 'chg-rejudge-seed',
+  seq: 999001,
+  roomId: 'room-rejudge-probe',
+  workspaceId: 'D:\\proj',
+  files: ['nothing-here.py'],
+  declaredBy: A.id,
+  ref: null,
+  verdict: 'unverified',
+  reason: 'no-worktree-found',
+  ts: 1,
+}
+await fs.mkdir(HOME, { recursive: true })
+await fs.writeFile(path.join(HOME, 'rooms.json'), JSON.stringify({ version: 1, changes: [SEED_CHANGE] }), 'utf8')
+
 apply(ctx)
+
+// 重判在 apply 时立刻跑一次（异步），所以这里等它把章写进盘 —— 不是等它"算出来"。
+let seeded = null
+for (let i = 0; i < 40 && seeded === null; i++) {
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  try {
+    const raw = JSON.parse(await fs.readFile(path.join(HOME, 'rooms.json'), 'utf8'))
+    const found = (raw.changes || []).find((c) => c.id === SEED_CHANGE.id)
+    if (found !== undefined && found.rejudgedUnder !== undefined) seeded = found
+  } catch { /* 还没落盘 */ }
+}
+check('重判盖的章**会落盘**（只盖在内存里 = 每次启动白跑一遍 · #3646 后的复验）',
+  seeded !== null && seeded.rejudgedUnder === rejudgeStamp(),
+  seeded === null ? '磁盘上一直没有 rejudgedUnder' : seeded.rejudgedUnder)
 
 const rpc = (endpoint, payload) => rpcCalls.handler(endpoint, payload)
 const tool = (n) => registered.find((t) => t.name === n)
