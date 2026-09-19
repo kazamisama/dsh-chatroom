@@ -9,6 +9,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
 import { verifyDeclaration, describeVerification, toRelative, resolveWorktree, criteriaFingerprint } from '../lib/gitcheck.js'
+import { REJUDGE_VERSION, assemblyFingerprint, rejudgeInputs, rejudgeStamp } from '../lib/rejudge.js'
 
 const run = promisify(execFile)
 
@@ -470,6 +471,37 @@ check('  判据源码变了 ⇒ 指纹必变（这条就是"忘了 +1"那个洞�
 check('  读不到源码 ⇒ null（调用方退化成手工版本号，而不是"全都不重判"）',
   criteriaFingerprint(path.join(root, 'not-here-at-all.js')) === null,
   criteriaFingerprint(path.join(root, 'not-here-at-all.js')))
+
+console.log('14. 重判的接线：章是**值**要对得上，判定输入要**真的**按声明文件路由（837e0518 #3641）')
+// 为什么单独立这一节：#3641 的变异 A —— 把 `const stamp = rejudgeStamp()` 换成常量 —— 让源码绊线
+// 整套照绿（那些字符串仍然全在：定义还摆着，只是没人用）。所以这里断言**值**与**行为**，不查字符串。
+const stamp = rejudgeStamp()
+const gPart = 'g' + createHash('sha256')
+  .update(await fs.readFile(new URL('../lib/gitcheck.js', import.meta.url))).digest('hex').slice(0, 12)
+const iPart = 'i' + createHash('sha256')
+  .update(await fs.readFile(new URL('../lib/rejudge.js', import.meta.url))).digest('hex').slice(0, 8)
+check('章 = g[gitcheck 字节] | i[重判模块字节] | v[手工挡]（逐段独立算出来对账）',
+  stamp === gPart + '|' + iPart + '|v' + REJUDGE_VERSION, { stamp, want: gPart + '|' + iPart + '|v' + REJUDGE_VERSION })
+check('  两段自动挡都真的在章里', stamp.split('|')[0] === gPart && stamp.split('|')[1] === iPart, stamp)
+const rejudgeCopy = path.join(root, 'rejudge-copy.js')
+await fs.writeFile(rejudgeCopy, Buffer.concat([
+  await fs.readFile(new URL('../lib/rejudge.js', import.meta.url)), Buffer.from('\n// 判据改了一个字节\n'),
+]))
+check('  判据模块改一个字节就换章（"忘 +1"那个洞的替代物）',
+  assemblyFingerprint(rejudgeCopy) !== iPart, { got: assemblyFingerprint(rejudgeCopy), iPart })
+
+// 判定输入：真仓库、跨仓路由、ref 带上、拿不到锚点就 null —— 这些以前只有"字符串在不在"的绊线。
+const starts = new Map([['session-x', Date.now() - 60000]])
+const inFiles = ['dsh-ulysses-mcp/src/tools_verify.py']
+const in1 = await rejudgeInputs({ workspaceId: sibUl, declaredBy: 'session-x', ref: mcpHead, files: inFiles }, starts)
+check('判定输入：按**声明文件**路由到兄弟仓（不是会话那个仓）',
+  in1 !== null && path.normalize(in1.workspace) === path.normalize(sibMcp) && in1.files.join() === 'src/tools_verify.py', in1)
+check('  带上原声明的 ref（#623：不带就会把「ref 无效」那档重判回「已证实」）', in1.ref === mcpHead, in1.ref)
+check('  锚点取自会话表里的 createdAt', in1.anchorMs === starts.get('session-x'), in1.anchorMs)
+const in3 = await rejudgeInputs({ workspaceId: sibUl, declaredBy: 'session-x', files: inFiles }, starts)
+check('  没给 ref → 传 null（不是编一个）', in3 !== null && in3.ref === null, in3)
+const in2 = await rejudgeInputs({ workspaceId: sibUl, declaredBy: 'nobody', ref: mcpHead, files: inFiles }, starts)
+check('  拿不到锚点 → null（调用方据此跳过、且不盖章）', in2 === null, in2)
 
 await fs.rm(root, { recursive: true, force: true })
 console.log('')

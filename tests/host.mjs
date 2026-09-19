@@ -800,10 +800,11 @@ const rejudgeEnd = indexSrc.indexOf('for (const change of store.state.changes)',
 // 退回"到文件末尾"是安全的：窗口只会变宽，而变宽只可能让 includes 更容易成立。
 check('  重判路径的结尾锚点还在（结构变了要红，别让窗口被悄悄截断）', rejudgeEnd > rejudgeStart, { rejudgeStart, rejudgeEnd })
 const rejudgeBlock = indexSrc.slice(rejudgeStart, rejudgeEnd > rejudgeStart ? rejudgeEnd : indexSrc.length)
-// 判定输入的装配（锚点 / ref / 路由）现在住在一个**具名函数**里 —— 这样它的源码才能进重判的章
-// （837e0518 #3638②），而循环体只负责"拿输入、调一回、盖章"。所以这三条要对着**它**看。
-const inputsAt = indexSrc.indexOf('async function rejudgeInputs(change, starts)')
-const inputsBlock = indexSrc.slice(inputsAt, inputsAt + 1600)
+// 判定输入的装配（锚点 / ref / 路由）住在一个**独立模块**里（lib/rejudge.js）—— 独立成文件，
+// 它的**字节**才进得了自动挡的摘要（837e0518 #3638②/#3641）。循环体只负责"拿输入、调一回、盖章"。
+const rejudgeSrc = await fs.readFile(new URL('../lib/rejudge.js', import.meta.url), 'utf8')
+const inputsAt = rejudgeSrc.indexOf('export async function rejudgeInputs(change, starts)')
+const inputsBlock = rejudgeSrc.slice(inputsAt, inputsAt + 1600)
 check('重判路径先按声明文件定位仓库',
   inputsBlock.includes('await resolveWorktree({ workspace: change.workspaceId'),
   inputsBlock.slice(0, 200))
@@ -822,20 +823,25 @@ check('  并把解析后的 workspace/files 交给 verifyDeclaration',
 // 判据版本（2026-09-20 自查出来的）：队列以前取「前 20 条」，而**判对了的红**永远留在队列里 ⇒
 // 队列只涨不落：超过 20 条之后，一条排在末尾的**新假红**再也轮不到重判 —— 自愈就静默失效了
 // （真机当天量到 12 条，只剩 8 格）。
+// #3641 的一行的洞（837e0518 用变异跑出来的）：上面这些断言只看"字符串在不在"——
+// 把 `const stamp = rejudgeStamp()` 换成 `const stamp = 'v' + REJUDGE_VERSION` 之后，
+// 那些字符串**仍然全在**（定义还摆着，只是没人用），整套照样绿，而两段自动挡已经没了。
+// 所以接线那一行必须单独守；"值对不对"由 tests/gitcheck.mjs 第 14 节逐段独立算出来对账。
+check('  接线那一行真的调了 rejudgeStamp()（#3641 的变异 A）',
+  /const stamp = rejudgeStamp\(\)/.test(indexSrc), 'stamp 必须取自 rejudgeStamp()，不能是常量')
 check('  按**判据指纹**盖章，不取「前 20 条」（否则新假红会被前面的堵死）',
-  indexSrc.includes('const rejudgeStamp = () =>') && indexSrc.includes('.filter((c) => c.rejudgedUnder !== stamp)'),
-  '判据指纹与那条 filter 缺一不可')
+  indexSrc.includes('.filter((c) => c.rejudgedUnder !== stamp)'),
+  '那条 filter 缺了就等于没盖章')
 // 837e0518 #3634③ + #3638②：章若只是"手工 +1 的常量"就会忘；而只盖 lib/gitcheck.js 又漏掉
 // index.js 这边装配的判据（锚点 / ref / 路由 —— #1454/#1458 修的**正是**这里）。
 // 所以章是**复合**的：两段自动挡（gitcheck 字节 + rejudgeInputs 源码）+ 一段手工挡（兜底/扳机）。
-check('  章是算出来的（两段自动挡 + 一段手工挡）',
-  indexSrc.includes("(criteriaFingerprint() || 'g0')") && indexSrc.includes('assemblyFingerprint()')
-  && indexSrc.includes("+ '|v' + REJUDGE_VERSION"),
-  indexSrc.slice(indexSrc.indexOf('const rejudgeStamp'), indexSrc.indexOf('const rejudgeStamp') + 260))
-check('  自动挡覆盖 index.js 那边的判据：锚点/ref/路由都在 rejudgeInputs 里，它的源码进指纹',
-  inputsAt > 0 && inputsBlock.includes('resolveWorktree({ workspace: change.workspaceId')
-  && inputsBlock.includes("ref: typeof change.ref === 'string'")
-  && indexSrc.includes('String(rejudgeInputs)'),
+check('  章在 lib/rejudge.js 里装配（两段自动挡 + 一段手工挡）',
+  rejudgeSrc.includes('export function rejudgeStamp()')
+  && rejudgeSrc.includes("(criteriaFingerprint() || 'g0') + '|' + assemblyFingerprint() + '|v' + REJUDGE_VERSION"),
+  rejudgeSrc.slice(rejudgeSrc.indexOf('export function rejudgeStamp'), rejudgeSrc.indexOf('export function rejudgeStamp') + 200))
+check('  自动挡覆盖 index.js 那边的判据：锚点/ref/路由都在 rejudgeInputs 里，模块字节进章',
+  inputsAt > 0 && inputsBlock.includes("ref: typeof change.ref === 'string'")
+  && rejudgeSrc.includes('export function assemblyFingerprint'),
   { inputsAt })
 check('  翻没翻都盖章（判据没变就不必把同样的 git 再跑一遍）',
   rejudgeBlock.includes('change.rejudgedUnder = stamp'), rejudgeBlock.slice(0, 400))
