@@ -795,7 +795,11 @@ const indexSrc = await fs.readFile(new URL('../lib/index.js', import.meta.url), 
 // 把后面那些行挤出窗口 —— 真机上就是这么把「former 在改写前读」那条绊线打红的（2026-09-20）。
 const rejudgeStart = indexSrc.indexOf('for (const change of pending)')
 const rejudgeEnd = indexSrc.indexOf('for (const change of store.state.changes)', rejudgeStart)
-const rejudgeBlock = indexSrc.slice(rejudgeStart, rejudgeEnd > rejudgeStart ? rejudgeEnd : rejudgeStart + 2400)
+// 找不到结尾锚点就**当场红**，不再退回一个字数上限（837e0518 #3634④ 提的那一处）：
+// 字数上限会让断言随代码长度**静默**失真 —— 真机 2026-09-20 就是这么把「former 在改写前读」挤出窗口的。
+// 退回"到文件末尾"是安全的：窗口只会变宽，而变宽只可能让 includes 更容易成立。
+check('  重判路径的结尾锚点还在（结构变了要红，别让窗口被悄悄截断）', rejudgeEnd > rejudgeStart, { rejudgeStart, rejudgeEnd })
+const rejudgeBlock = indexSrc.slice(rejudgeStart, rejudgeEnd > rejudgeStart ? rejudgeEnd : indexSrc.length)
 check('重判路径先按声明文件定位仓库',
   rejudgeBlock.includes('await resolveWorktree({ workspace: change.workspaceId'),
   rejudgeBlock.slice(0, 160))
@@ -813,14 +817,20 @@ check('  并把解析后的 workspace/files 交给 verifyDeclaration',
 // 判据版本（2026-09-20 自查出来的）：队列以前取「前 20 条」，而**判对了的红**永远留在队列里 ⇒
 // 队列只涨不落：超过 20 条之后，一条排在末尾的**新假红**再也轮不到重判 —— 自愈就静默失效了
 // （真机当天量到 12 条，只剩 8 格）。
-check('  按**判据版本**盖章，不取「前 20 条」（否则新假红会被前面的堵死）',
-  indexSrc.includes('const REJUDGE_VERSION')
-  && indexSrc.includes('.filter((c) => c.rejudgedUnder !== REJUDGE_VERSION)'),
-  'REJUDGE_VERSION 与那条 filter 缺一不可')
+check('  按**判据指纹**盖章，不取「前 20 条」（否则新假红会被前面的堵死）',
+  indexSrc.includes('const rejudgeStamp = () => criteriaFingerprint()')
+  && indexSrc.includes('.filter((c) => c.rejudgedUnder !== stamp)'),
+  '判据指纹与那条 filter 缺一不可')
+// 837e0518 #3634③：章若是"手工 +1 的常量"，忘 +1 就是自愈**静默**失效且没有读数会提示。
+// 现在章是**算出来的**（judge 指纹），手工版本号只在读不到源码时兜底。
+check('  章是算出来的，不是手工 +1 的常量（忘 +1 = 静默失效）',
+  indexSrc.includes("criteriaFingerprint() || ('v' + REJUDGE_VERSION)")
+  && indexSrc.includes('criteriaFingerprint, VERIFIED }'),
+  indexSrc.slice(indexSrc.indexOf('const rejudgeStamp'), indexSrc.indexOf('const rejudgeStamp') + 240))
 check('  翻没翻都盖章（判据没变就不必把同样的 git 再跑一遍）',
-  rejudgeBlock.includes('change.rejudgedUnder = REJUDGE_VERSION'), rejudgeBlock.slice(0, 400))
+  rejudgeBlock.includes('change.rejudgedUnder = stamp'), rejudgeBlock.slice(0, 400))
 const anchorSkip = rejudgeBlock.indexOf('typeof anchorMs !==')
-const stampAt = rejudgeBlock.indexOf('change.rejudgedUnder = REJUDGE_VERSION')
+const stampAt = rejudgeBlock.indexOf('change.rejudgedUnder = stamp')
 check('  拿不到锚点时**不盖章**（会话表可能还没挂载完，下次还要再试）',
   anchorSkip >= 0 && stampAt > anchorSkip && !rejudgeBlock.slice(anchorSkip, stampAt).includes('rejudgedUnder'),
   { anchorSkip, stampAt })

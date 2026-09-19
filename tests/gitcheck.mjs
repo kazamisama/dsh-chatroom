@@ -7,7 +7,8 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { verifyDeclaration, describeVerification, toRelative, resolveWorktree } from '../lib/gitcheck.js'
+import { createHash } from 'node:crypto'
+import { verifyDeclaration, describeVerification, toRelative, resolveWorktree, criteriaFingerprint } from '../lib/gitcheck.js'
 
 const run = promisify(execFile)
 
@@ -450,6 +451,25 @@ check('  结论说「这些路径不在本仓库」', crossText.includes('不是
 check('  不说「与事实不符」', !crossText.includes('与事实不符'), crossText)
 check('  提示点名上一级目录下的两个兄弟仓',
   crossText.includes('上一级目录') && crossText.includes('dsh-ulysses-mcp') && crossText.includes('other'), crossText)
+
+console.log('13. 判据指纹：改了判据源码 ⇒ 重判的章必变（837e0518 #3634③ 提的残留风险）')
+// 重判按「在本判据版本下重判过没有」过滤，而这个"版本"原本是个**手工 +1** 的常量。
+// 忘了 +1 ⇒ 老记录带着旧章再也不会被重判 ⇒ 「被冤枉的标能自己长回来」**静默失效**，
+// 而且没有任何读数会提示（7d3dc86 改的就是判定基准 —— 它要是发生在盖章之后而没人 +1，
+// 那批假红就永远留在原判）。所以章改成**判据源码自己的摘要**：判据一改，它自己就变。
+const fp1 = criteriaFingerprint()
+const fp2 = criteriaFingerprint()
+check('指纹可算，且同一份源码两次调用相同', typeof fp1 === 'string' && fp1.length > 8 && fp1 === fp2, { fp1, fp2 })
+const criteriaSrc = await fs.readFile(new URL('../lib/gitcheck.js', import.meta.url))
+check('  它确实来自**这个文件**的字节（不是写死的常量）',
+  fp1 === 'g' + createHash('sha256').update(criteriaSrc).digest('hex').slice(0, 12), { fp1 })
+const criteriaCopy = path.join(root, 'criteria-copy.js')
+await fs.writeFile(criteriaCopy, Buffer.concat([criteriaSrc, Buffer.from('\n// 判据改了一个字节\n')]))
+check('  判据源码变了 ⇒ 指纹必变（这条就是"忘了 +1"那个洞的替代物）',
+  criteriaFingerprint(criteriaCopy) !== fp1, { copy: criteriaFingerprint(criteriaCopy), fp1 })
+check('  读不到源码 ⇒ null（调用方退化成手工版本号，而不是"全都不重判"）',
+  criteriaFingerprint(path.join(root, 'not-here-at-all.js')) === null,
+  criteriaFingerprint(path.join(root, 'not-here-at-all.js')))
 
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
