@@ -4,6 +4,7 @@ import path from 'node:path'
 import {
   createChatroomStore, shortId, parseMentions, parseMentionsScoped, ownedPaths, detectOverreach, saysNoReply, VERDICTS,
   structuredPaths, memberOwnership, matchesOwnedPath, suspectGlobs, cleanPathList, DIRECTION_MAX_CHARS,
+  extraFilesOwnerNote,
 } from '../lib/rooms.js'
 
 const root = path.join(os.tmpdir(), 'dsh-chatroom-smoke-' + Date.now())
@@ -202,6 +203,16 @@ check('没有方向的成员不参与判定', detectOverreach(['anything.py'], r
 check('被用户关掉的成员不参与判定',
   detectOverreach(['js/chat.js'], [{ ...roster[0], enabled: false }], 'session-audit').length === 0)
 check('空输入不炸', detectOverreach(undefined, undefined, 'x').length === 0)
+
+// ref 覆盖之外的额外文件**落在谁的地盘**（837e0518 #3863 的提案）：范围提示，不是判词、不是义务。
+const sweepNote = extraFilesOwnerNote(['webui/pages/static/js/chat.js', 'docs/notes.md'], roster, 'session-audit')
+check('额外文件落在别人边界里 → 点名它',
+  sweepNote.includes('js/chat.js') && sweepNote.includes(shortId('session-impl')), sweepNote)
+check('  只写裸短号：**不许**出现 @（那会制造一次提及/义务）', !sweepNote.includes('@'), sweepNote)
+check('  并明说"不需要谁回话"', sweepNote.includes('不需要谁回话'), sweepNote)
+check('没人认领的额外文件 → 不写这句（不加噪音）',
+  extraFilesOwnerNote(['docs/notes.md'], roster, 'session-audit') === '', extraFilesOwnerNote(['docs/notes.md'], roster, 'session-audit'))
+check('空输入不炸', extraFilesOwnerNote(undefined, undefined, 'x') === '', extraFilesOwnerNote(undefined, undefined, 'x'))
 
 console.log('14. 越界检测的假阳性（真机 #45 报来的原文）')
 // 原文要点：路径字面量出现在**否定**语境里（「我从未声明过所有权…只追加自己的章节」），

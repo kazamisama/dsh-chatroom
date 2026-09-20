@@ -503,6 +503,32 @@ check('  没给 ref → 传 null（不是编一个）', in3 !== null && in3.ref 
 const in2 = await rejudgeInputs({ workspaceId: sibUl, declaredBy: 'nobody', ref: mcpHead, files: inFiles }, starts)
 check('  拿不到锚点 → null（调用方据此跳过、且不盖章）', in2 === null, in2)
 
+console.log('15. ref 覆盖之外的额外文件要**说出来**（837e0518 #3863：数据早就在手里，差值被丢掉了）')
+// 真机形状 75815b9：commit message 写的是「docs: …」，实际带着 ulysses/web/app.py +25/-3，
+// 而当事人**没有自曝** —— 是别人事后用 `git log -S` 追出来的，变更记录行至今写着"改 docstring"。
+// 核验器本来就把 ref 的全部改动文件取到手了，却只用它给声明的文件打 refCovers ⇒ 差值那一半被丢掉。
+await fs.writeFile(path.join(repo, 'declared.py'), 'd = 1\n', 'utf8')
+await fs.writeFile(path.join(repo, 'swept-code.py'), 'c = 1\n', 'utf8')
+await fs.writeFile(path.join(repo, 'swept-doc.md'), '# doc\n', 'utf8')
+// **显式路径**，不是 `git add .` —— 我第一版就是那么写的，结果把前面几节留在工作区的两个脏文件
+// （app.py / util.py）一起卷进了这个提交，断言拿到 4 个文件而不是 2 个。
+// 实现是对的、夹具是错的；而这条测试**当场就把这件事说了出来**（它本来就是干这个的）。
+await git(repo, ['add', 'declared.py', 'swept-code.py', 'swept-doc.md'])
+await git(repo, ['commit', '-q', '-m', 'docs: 顺手带上两个文件'])
+const sweepRef = (await git(repo, ['rev-parse', '--short', 'HEAD'])).trim()
+const sw = await verifyDeclaration({ workspace: repo, files: ['declared.py'], ref: sweepRef })
+check('声明一个文件、ref 改了三个 → 仍然「已证实」（它是范围提示，不是判词）',
+  sw.verdict === 'verified' && sw.refState === 'ok', sw)
+check('  refExtra 正好是那两个没声明的文件', sw.refExtra.join() === 'swept-code.py,swept-doc.md', sw.refExtra)
+const swText = describeVerification(sw)
+check('  结论里把它们点出来（带条数）',
+  swText.includes('2 个未声明的文件') && swText.includes('swept-code.py') && swText.includes('swept-doc.md'), swText)
+check('  并说明只是提示、不改判词', swText.includes('不改判词'), swText)
+// 反向对照：ref **只**改了声明的文件 → 一个字都不加（不留噪音）
+const swClean = await verifyDeclaration({ workspace: repo, files: ['declared.py', 'swept-code.py', 'swept-doc.md'], ref: sweepRef })
+check('ref 只改了声明的文件 → refExtra 为空', swClean.refExtra.length === 0, swClean.refExtra)
+check('  结论里也不出现这句（没噪音）', !describeVerification(swClean).includes('未声明的文件'), describeVerification(swClean))
+
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
