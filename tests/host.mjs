@@ -12,8 +12,9 @@ import path from 'node:path'
 const HOME = path.join(os.tmpdir(), 'dsh-chatroom-host-' + Date.now())
 process.env.DSH_CHATROOM_HOME = HOME
 
-const { apply, inject, name } = await import('../lib/index.js')
+const { apply, inject, name, isSessionLogName, classifySessionDir } = await import('../lib/index.js')
 const { rejudgeStamp } = await import('../lib/rejudge.js')
+const zlib = await import('node:zlib')
 
 let pass = 0
 let fail = 0
@@ -910,6 +911,46 @@ check('  载荷里带主机自报耗时（面板据此把"通道"与"我"分开�
   stSlow.ok === true ? stSlow.value.ms : stSlow)
 titleDelayMs = 0
 await new Promise((resolve) => setTimeout(resolve, 500)) // 等后台预热收尾，别影响后面的用例
+
+console.log('13. 会话目录的读法：**认得出名字**、**数得全帧**（DSH 0.1.7-alpha.2 的适配）')
+// 真机形状（2026-09-23 升级后照出来的）：
+//  · 0.1.7 写的是 session.v4.jsonl.zstd，而候选名单停在 v3 ⇒ 名字认不出 ⇒ bytes=0 ⇒ 判成"空会话"；
+//  · 更根本的一条：日志是**多帧**的（每次 flush 一帧），而 Node 的 zstd API **只解第一帧** ——
+//    第一帧永远只有 session 头那一行（v3/v4 都一样，实测 8.9MB/104 帧的日志首帧也是 1 行）⇒
+//    "解压数行数"这条老判据每次执行都判错。真机上 20 个小日志样本，老规则 **20/20 判错**，
+//    新规则与 DSH 自己的口径（blank = seq === 0）**20/20 一致**。
+check('文件名认得出 v4（0.1.7 写的就是它）', isSessionLogName('session.v4.jsonl.zstd'))
+check('  也认得出 v3 / 无名版 / 未压缩', isSessionLogName('session.v3.jsonl.zstd')
+  && isSessionLogName('session.jsonl.zstd') && isSessionLogName('session.jsonl'))
+check('  连**没见过**的版本号也认（下一个大版本改名不会再静默瞎掉）', isSessionLogName('session.v9.jsonl.zstd'))
+check('  但不是日志的一律不认', !isSessionLogName('notes.txt') && !isSessionLogName('session.v4.jsonl.zstd.bak')
+  && !isSessionLogName('session-projection-cache.json'))
+const frame = (text) => zlib.zstdCompressSync(Buffer.from(text, 'utf8'))
+const mkdir = async (name, files) => {
+  const dir = path.join(HOME, 'sessions-probe', name)
+  await fs.mkdir(dir, { recursive: true })
+  for (const [f, buf] of Object.entries(files)) await fs.writeFile(path.join(dir, f), buf)
+  return dir
+}
+const HEADER = '{"type":"session","version":4,"id":"session-x"}\n'
+const EMPTY_MULTIFRAME = Buffer.concat([frame(HEADER), frame('')])
+const USED_MULTIFRAME = Buffer.concat([frame(HEADER), frame('{"type":"permission/preset","seq":0}\n{"type":"sandbox/mode","seq":1}\n')])
+const d1 = await mkdir('empty', { 'session.v4.jsonl.zstd': EMPTY_MULTIFRAME })
+const d2 = await mkdir('used', { 'session.v4.jsonl.zstd': USED_MULTIFRAME })
+const d3 = await mkdir('future', { 'session.v9.jsonl.zstd': USED_MULTIFRAME })
+const d4 = await mkdir('plain', { 'session.jsonl': Buffer.from(HEADER + '{"seq":1}\n', 'utf8') })
+const d5 = await mkdir('plainblank', { 'session.jsonl': Buffer.from(HEADER, 'utf8') })
+const d6 = await mkdir('noise', { 'session.v4.jsonl.zstd': USED_MULTIFRAME, 'notes.txt': Buffer.from('x'.repeat(9999), 'utf8') })
+const blankOf = async (d) => (await classifySessionDir(d)).blank
+check('头部一帧 + 空帧 → 仍是空会话', (await blankOf(d1)) === true)
+check('头部一帧 + **记录帧** → 不再是空会话（老规则在这里判错）', (await blankOf(d2)) === false)
+check('  没见过的版本号走兜底扫描，同样判对', (await blankOf(d3)) === false)
+check('未压缩的日志照样数得出记录', (await blankOf(d4)) === false && (await blankOf(d5)) === true)
+check('目录里的无关大文件不参与判定', (await blankOf(d6)) === false)
+check('  但"最近活动"取的是**日志文件**的 mtime（比目录准）',
+  (await classifySessionDir(d2)).logFile.endsWith('session.v4.jsonl.zstd'),
+  (await classifySessionDir(d2)).logFile)
+check('不存在的目录返回 null（不炸）', (await classifySessionDir(path.join(HOME, 'no-such-dir'))) === null)
 
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
