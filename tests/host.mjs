@@ -245,9 +245,13 @@ const textA = callsOf(A)[0].message.content[0].text
 check('消息带房间与序号', textA.includes('[聊天室 变更同步 #1]'), textA)
 check('消息点名必须回一句', textA.includes('必须回一句判断') && textA.includes('room_judge'))
 check('消息枚举了四种 verdict', textA.includes('unaffected') && textA.includes('retest'))
-check('来源是 relay 形态（GUI 才认）', callsOf(A)[0].message.source.form === 'relay'
-  && callsOf(A)[0].message.source.kind === 'plugin'
-  && callsOf(A)[0].message.source.plugin === 'dsh-chatroom', callsOf(A)[0].message.source)
+// 来源形态 = DSH 在两个分支上都**已声明**的 kind（v3 的 { kind:'plugin', plugin:… } 包装在 v4 里
+// 被**明确拒绝**：真机 2026-09-23 被唤醒的会话报「format v4 message requires a producer-owned source kind」）。
+// 这里那条是**人发的**（面板 say，房间里没有 sessionId）⇒ user 分支；
+// 会话发的 agent-message 分支由第 14 节的全量扫描钉住。
+check('来源是 v4 认可的形态（人的发言 → user，带 roomId）',
+  callsOf(A)[0].message.source.kind === 'user'
+  && callsOf(A)[0].message.source.roomId === roomId, callsOf(A)[0].message.source)
 check('消息已冻结（不可变）', Object.isFrozen(callsOf(A)[0].message))
 // 回归：DSH 的会话日志走严格 lossless-JSON 校验，一条 undefined 就整条拒收。
 // 真机上表现为 delivered:false + "carries non-JSON-serializable data"。
@@ -951,6 +955,24 @@ check('  但"最近活动"取的是**日志文件**的 mtime（比目录准）',
   (await classifySessionDir(d2)).logFile.endsWith('session.v4.jsonl.zstd'),
   (await classifySessionDir(d2)).logFile)
 check('不存在的目录返回 null（不炸）', (await classifySessionDir(path.join(HOME, 'no-such-dir'))) === null)
+
+console.log('14. 每条投递都要过 DSH 的 **v4 source 判据**（真机 2026-09-23 的报错形状）')
+// 判据逐字照搬 DSH：dsh-session-persistence-jsonl 的 v4 校验 ——
+// source 是对象、kind 是非空字符串、且 ≠ 'plugin'。不满足就整条投递被拒，
+// 而插件这一侧只看到"投递失败"，被唤醒的会话才看得到原因。
+const v4SourceOk = (m) => {
+  const s = m === undefined || m === null ? null : m.source
+  return s !== null && typeof s === 'object' && typeof s.kind === 'string' && s.kind.length > 0 && s.kind !== 'plugin'
+}
+const allDelivered = [...live.values()].flatMap((a) => callsOf(a).map((c) => ({ session: a.id, message: c.message })))
+const badSource = allDelivered.filter((d) => !v4SourceOk(d.message))
+check('整套测试里投出去的 ' + allDelivered.length + ' 条消息，source 全部过 v4 判据',
+  allDelivered.length > 0 && badSource.length === 0,
+  badSource.slice(0, 2).map((b) => b.message && b.message.source))
+check('  会话发的用 agent-message（带真实 senderSessionId）',
+  allDelivered.some((d) => d.message.source.kind === 'agent-message' && typeof d.message.source.senderSessionId === 'string'))
+check('  人发的用 user（房间里没有 sessionId，不能编一个）',
+  allDelivered.some((d) => d.message.source.kind === 'user'), '人的发言也要投给成员')
 
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')

@@ -2279,6 +2279,37 @@ sha256 留档、另加一条只改注释的**安慰剂**）。四条变异里有
 全套 **773 passed**。
 
 
+## 11.51 DSH 0.1.7 的 session format v4 拒收 v3 的 source 包装 —— **被唤醒的会话收不到房间消息**（真机 2026-09-23 · 已改，宿主侧待重启）
+
+**症状（用户报来的原话）**：别的会话被唤醒时报
+「format v4 message requires a producer-owned source kind」。
+
+**根因**：插件投给会话的消息，source 是 `{ kind: 'plugin', plugin: 'dsh-chatroom', form: 'relay',
+senderSessionId, roomId }`（D7a 时代的写法：自定义 kind 会掉进客户端的 OpaqueBody 分支，所以借 plugin 包装）。
+而 v4 起这个包装被**明确拒绝**：`dsh-session-persistence-jsonl` 的 v4 校验要求 `source.kind` 是
+**非空字符串且 ≠ 'plugin'**。后果不是"渲染难看"，是**整条投递被拒** —— 别人**收不到**房间消息，
+而插件这一侧只看到"投递失败"，只有被唤醒的那个会话才看得到原因。
+
+**用 DSH 自己的校验器复现**（不是我读码推断）：`dsh-session-format-v3-to-v4` 导出的 `assertV4RowAdmission(row)`，
+喂一条 `type:'user/message'` 的行：旧形态 → **被拒**，报的正是用户看到的那一句；新形态两条分支 → 通过。
+（诚实标注：那个入口只拒"retired 包装"；"kind 必须非空"这一条在同步路径的 `source()` 里，
+我把它逐字抄进了测试判据。）
+
+**改法**：新增 `chatroomSource(author, roomId)`，两个分支都用 **DSH 已声明的** kind：
+· 有作者（会话发的）⇒ `{ kind: 'agent-message', form: 'relay', senderSessionId, roomId }` ——
+  DSH 自己的 `AgentMessageSource`，与 `dsh-subagent` 的 `agentMessageSource(sender)` 逐字同形；
+  客户端 `turnTriggerDetails` 的 `case 'agent-message'` 给的就是「来自会话 X」那套标题/图标，
+  也就是说 **D7a 想要的效果一点没丢**，只是换了条已声明的路走。
+· 人发的（房间里只有 `sender: { user: true }`，没有 sessionId）⇒ `{ kind: 'user', roomId }` ——
+  树内对用户输入的规范 kind。**不编一个假 sessionId** 去凑 `agent-message`。
+· 两处 diagnose ping 也改走**同一个**构造函数：诊断与真实投递必须同形，否则诊断没有意义。
+· 删掉 `SOURCE_PLUGIN` 常量 —— v4 起插件不再声明自己的 source kind，留着只会让人以为它还在用。
+
+**测试**：`host` **+3**（第 14 节把 DSH 的 v4 判据逐字抄成 `v4SourceOk()`，**扫全套投出去的每一条消息**；
+另两条钉住两个分支各自用对了 kind）；原来那条 `kind === 'plugin' && plugin === 'dsh-chatroom'` 的断言
+改成 v4 口径。全套 **776 passed**。
+
+
 ## 12. 风险与未决
 
 1. ~~**冷会话唤醒**：活着的 Agent 好办；没有活 Agent 的顶层会话能否由插件唤醒待确认。~~
