@@ -1023,6 +1023,28 @@ check('  没被点名的人也 +1（人的发言按设计叫全体，不是漏�
 await tool('room_judge').execute({ room: roomId, seq: seq15, verdict: 'unaffected' }, exec(A))
 check('  它表态 = **确认**，台账清零', (await pending15(A.id)) === 0, await pending15(A.id))
 
+console.log('16. 房间工具的**成员栅栏**（真机 2026-09-23：非成员的 subagent 成功声明，还给人造了义务）')
+const outsider = fakeAgent('session-99998888-1111-2222-3333-444455556666')
+const outDecl = await tool('room_declare_change').execute({ room: roomId, files: ['x.py'], summary: '非成员试试' }, exec(outsider))
+check('非成员声明 → 被拒（返回形状仍守它自己的 schema）',
+  outDecl.seq === 0 && String(outDecl.text).includes('不是房间'), outDecl)
+check('  文案给出可操作的一条（成员由用户在面板里加）', String(outDecl.text).includes('用户显式加入'), outDecl.text)
+const outSay = await tool('room_say').execute({ room: roomId, text: '非成员发言' }, exec(outsider))
+check('非成员发言 → 被拒', outSay.seq === 0 && String(outSay.text).includes('不是房间'), outSay)
+const outJudge = await tool('room_judge').execute({ room: roomId, seq: 1, verdict: 'unaffected' }, exec(outsider))
+check('非成员表态 → 被拒', outJudge.ok === false && String(outJudge.text).includes('不是房间'), outJudge)
+const outTask = await tool('room_task').execute({ room: roomId, op: 'list' }, exec(outsider))
+check('非成员看任务板 → 也被拒（读侧一样拦：泄漏面就是历史）', outTask.ok === false, outTask)
+const outList = await tool('room_status').execute({}, exec(outsider))
+check('非成员"列出全部房间" → 一个都看不到', outList.text.includes('还没有加入任何聊天室'), outList.text)
+const outNamed = await tool('room_status').execute({ room: roomId }, exec(outsider))
+check('非成员点名某个房间 → 也拒', outNamed.text.includes('不是房间'), outNamed.text)
+const inStatus = await tool('room_status').execute({ room: roomId }, exec(A))
+check('成员照常能用（别把好人也拦了）', !inStatus.text.includes('不是房间'), inStatus.text.slice(0, 60))
+const snap16 = (await rpc('state', {})).value.rooms.find((r) => r.room.id === roomId)
+check('  非成员的发言没有在房间里留下任何消息',
+  !JSON.stringify(snap16.messages).includes('非成员发言'), '房间里不该有它的声音')
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
