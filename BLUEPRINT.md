@@ -2310,6 +2310,63 @@ senderSessionId, roomId }`（D7a 时代的写法：自定义 kind 会掉进客�
 改成 v4 口径。全套 **776 passed**。
 
 
+## 11.52 从 DSH agent-team 抄三样：投递台账 · 任务板 DAG · 写前体检（用户拍板「抄，允许大改」· 已改，宿主侧待重启）
+
+**动机**：DSH 0.1.7-alpha.2 自带的 `dsh-experimental-agent-team`（实验性，用户这份 profile 没开）里有几样
+房间没有的机制。逐条对着它的实现看过之后，抄了三样 —— 每一条都写清了"它的原文"与"房间为什么需要"。
+
+### ① 投递台账：投递 · 确认 · 恢复（它的 `src/mailbox.ts`）
+它的原话：*Durable queue, target-local dispatch, **acknowledgement**, and recovery*；
+设计原则里：*the guarantee is **retry plus de-duplication***；模型可见面：*a teammate that was offline receives its
+queued messages when it resumes*。
+**房间原来的形状**：`fanout()` 在消息产生时**只投一次**，best-effort；投失败就永远丢了 —— 义务还挂在房间里
+（room_status 看得见「欠」），但那个人**永远不会知道**有人叫过它。而且 `markRead` 只在 `judge()`/`join()` 推进，
+所以「已读 N」其实是"最后表过态的 seq"，`deltaFor` 写好了却只有测试在用。
+**改法**：
+· `state.deliveries: [{roomId, sessionId, seq, at, deliveredAt, attempts}]` —— **只在还没确认时留痕**，确认即删；
+· 投递时 `recordDelivery`（幂等）→ 成功 `markDelivered` / 失败 `failDelivery`（attempts+1）；
+· **补投**：下一次给这个人投递时，先补一帧"上次没投出去"的最老的（≤ 每条 3 次）；
+· **确认（ack）**发生在它自己动房间工具时：`room_judge`（确认到该 seq）、`room_message`（拉到哪条确认到哪条）、
+  `room_status`（确认到房间最后一条）—— 判据是"它确实到了房间里"，不是"帧投出去了"。
+· **背景通道（inject）不进台账**：它本来就是"看得到但不打扰"的尽力而为，记成待确认会让计数永远不归零。
+· **热路径纪律**：record/mark/fail 只改内存，由 fanout 在循环后 persist **一次**（rooms.json 真机已 7.8 MB，
+  每个成员写一次会把一条消息变成 N 次整份落盘）。
+· 面板：每个成员多一个 `pending`（未确认条数，0 不显示）。
+
+### ② 任务板 + DAG（它的 `src/task-board.ts`：*Task CAS commands, DAG validation, and derived views*）
+**房间原来没有分工**：只有"谁改了什么"（changes）与"谁欠谁"（obligations）。
+**改法**：`state.tasks` + `room_task` 工具（create/claim/update/list），字段 `title / status / owner / deps / expectPaths / note`。
+· **依赖成环被拒**（`checkDeps` + `taskReaches`）；依赖必须同房间、必须已存在；认领别人的任务被拒；状态必须枚举内。
+· **最值钱的一处是时机**：`expectPaths`（这个任务预期要改哪些文件）在**建任务/认领任务的那一刻**就和成员边界对一遍
+  （复用 `detectOverreach`，与 room_declare_change 同一个判据）⇒ 越界从**事后**（改完才 ⚠）提前到**事前**
+  （接活时就看见会碰谁的地盘）。而且**不写 @、不登记义务** —— 任务板是分工，不是要谁表态。
+
+### ③ 写前体检（它的 `src/invariant.ts`：*replays candidate events before append*）
+**房间原来**：整份 state 直接 `JSON.stringify` 落盘，**写之前没有任何校验** —— 给非成员登记义务、
+回执指向不存在的 seq、依赖成环，都会静默写进去、留在盘上。
+**改法**：`lib/invariants.js`（**由 teammate 独立写**，见下）三个纯函数 `assertMessageAppend / assertJudgment /
+assertTaskWrite`，同步、不改传入对象、失败抛 `err.code = 'INVARIANT_*'`；接在 rooms.js 的四个写入口上，
+**push 之前**。顺带把 `updateTask` 改成「先造候选 → 全部校验 → 才动内存」：原来校验失败会留下"改了一半"的任务，
+而调用方只看到失败。
+
+### 没抄的两样（写下来免得以后有人再想一遍）
+· **durable log + replay 的架构**：它的真相在"Lead 会话日志里，读时重放"。房间**没有那个 Lead** —— 14 个成员是
+  对等的、跨工作区、由人加入的。把房间状态挂到某个会话日志上等于凭空造一个主会话出来。
+· **`wait_agent` 式阻塞等待**：房间的哲学是**投递即唤醒**（push），让一个 agent 阻塞等房间变化会占住一次工具调用，
+  且与"不相关的不打扰"直接冲突。
+
+### 开发过程本身也用了那个模式（用户建议）
+先**冻结接口**（state 两张新表 + rooms.js 导出签名 + RPC 载荷），再把写作用域切成**不相交**的三块：
+teammate A = `lib/client.js` + `tests/panel.mjs`（面板任务板与待确认计数）；teammate B = `lib/invariants.js` +
+`tests/invariants.mjs` + `tests/all.mjs` 一行；我自己 = `lib/rooms.js` + `lib/index.js` + 两个宿主测试套件。
+两个 teammate 都按约定**不 commit、不碰别人的文件**，各自报回文件与测试计数；A 甚至主动报告了"host 套件里
+「注册了 8 个工具」那条现在会红（因为我在飞的 `room_task` 让它变成 9 个）" —— 但**没有越界去改它**，
+这正是 agent-team 文档里那句 "*record expected write scopes on shared tasks … review the final diff*" 的落点。
+
+**测试**：`smoke` 196 → **225**（台账/任务/落盘/写入口体检）、`host` 216 → **236**（room_task 行为 + 事前越界 +
+台账增量与确认）、`panel` 193 → **218**（任务板渲染与待确认计数）、新增 `invariants` **93**。全套 **940 passed**。
+
+
 ## 12. 风险与未决
 
 1. ~~**冷会话唤醒**：活着的 Agent 好办；没有活 Agent 的顶层会话能否由插件唤醒待确认。~~

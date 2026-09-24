@@ -52,6 +52,8 @@ const NAMES = [
   'directionLineOf',
   // 拉取的分布（2026-09-16 方案 a：最大值读不出"尖峰还是常态"）
   'recentStats',
+  // 任务板 + 投递台账（宿主新加的两张表：字段缺失 / 不是数组 / 元素缺字段都要容错）
+  'taskStatusLabel', 'taskRowsOf', 'taskLineOf', 'pendingDeliveryLabel',
 ]
 const missing = NAMES.filter((n) => extractFunction(src, n) === null)
 if (missing.length > 0) {
@@ -550,6 +552,88 @@ check('空样本 / undefined 不炸',
   api.recentStats([], nowS).median === 0)
 check('全是旧样本 → 计数 0（头部那一行整块消失）',
   api.recentStats([sample(10 * 60000, 5000)], nowS).count === 0)
+
+console.log('23. 任务板 + 投递台账（宿主新加的两张表：面板只消费，且字段可能还没到齐）')
+// 一份「宿主已经改完」的合成载荷（形状照冻结协议写）
+const tasksRoom = {
+  tasks: [
+    { id: 't1', title: '浏览器半侧任务板', status: 'claimed', owner: 'session-aaaa1111-1',
+      deps: [], expectPaths: ['lib/client.js'], updatedAt: 11 },
+    { id: 't2', title: '宿主侧投递台账', status: 'open', owner: null,
+      deps: ['t1'], expectPaths: [], updatedAt: 12 },
+  ],
+}
+const trows = api.taskRowsOf(tasksRoom)
+check('任务条数 = 载荷里的条数（面板标题上的计数就是它）', trows.length === 2, trows.length)
+check('owner：给的是短号（喂全长 id 也剥成短号）', trows[0].owner === 'aaaa1111', trows[0].owner)
+check('owner：null → 「未认领」（不是空白、也不是 null 字样）', trows[1].owner === '未认领', trows[1].owner)
+check('状态翻成中文', trows[0].status === '已认领' && trows[1].status === '待认领',
+  [trows[0].status, trows[1].status])
+check('依赖 / 预期改动规整成数组',
+  trows[1].deps.join() === 't1' && trows[0].expectPaths.join() === 'lib/client.js',
+  [trows[1].deps, trows[0].expectPaths])
+check('元信息一行：状态 · 归属 · 依赖 · 预期改动都在',
+  api.taskLineOf(trows[0]) === '已认领 · aaaa1111 · 预期改动 lib/client.js'
+  && api.taskLineOf(trows[1]) === '待认领 · 未认领 · 依赖 t1',
+  [api.taskLineOf(trows[0]), api.taskLineOf(trows[1])])
+// ② tasks 为空 → 整块不出现：块的出现条件就是 taskRowsOf(...).length > 0
+check('tasks 为空数组 → 空（整块不出现）', api.taskRowsOf({ tasks: [] }).length === 0)
+check('  字段缺失 / null / 不是数组 → 空（宿主还没改完也不炸）',
+  api.taskRowsOf({}).length === 0 && api.taskRowsOf({ tasks: null }).length === 0
+  && api.taskRowsOf({ tasks: 't1' }).length === 0 && api.taskRowsOf(undefined).length === 0
+  && api.taskRowsOf(null).length === 0)
+check('  元素缺字段也不炸（title/owner/deps/expectPaths/status 全可缺）',
+  api.taskRowsOf({ tasks: [{}, { title: '只有标题' }, null, undefined] }).length === 2,
+  api.taskRowsOf({ tasks: [{}, { title: '只有标题' }, null, undefined] }).length)
+check('  缺 title 给一个可读的占位（不许渲染出一行空白）',
+  api.taskRowsOf({ tasks: [{}] })[0].title === '(无标题任务)')
+check('  没见过的状态原样带出（不吞、也不猜成已完成）',
+  api.taskRowsOf({ tasks: [{ status: 'blocked' }] })[0].status === 'blocked')
+check('  deps / expectPaths 里的 null、空串、非数组成员都被丢掉',
+  JSON.stringify(api.taskRowsOf({ tasks: [{ deps: [null, '', 't1', undefined], expectPaths: 'x' }] })[0])
+    .includes('"deps":["t1"]')
+  && JSON.stringify(api.taskRowsOf({ tasks: [{ deps: [null, '', 't1', undefined], expectPaths: 'x' }] })[0])
+    .includes('"expectPaths":[]'))
+check('taskLineOf 空输入不炸', api.taskLineOf(undefined) === '' && api.taskLineOf(null) === '')
+// ③ pending：0 不显示、>0 才显示
+check('pending=0 → 空串（这一行一个字都不多）', api.pendingDeliveryLabel(0) === '', api.pendingDeliveryLabel(0))
+check('pending=2 → 显示 2', api.pendingDeliveryLabel(2) === '2 条待确认', api.pendingDeliveryLabel(2))
+check('  缺失 / null / 非数 / 负数 → 空串且不炸',
+  api.pendingDeliveryLabel(undefined) === '' && api.pendingDeliveryLabel(null) === ''
+  && api.pendingDeliveryLabel('x') === '' && api.pendingDeliveryLabel(-3) === '')
+check('  数字字符串也认（载荷过 JSON，但别假设宿主一定给 number）',
+  api.pendingDeliveryLabel('2') === '2 条待确认', api.pendingDeliveryLabel('2'))
+check('  小数取整（投递条数只可能是整数，万一是小数也别显示半个）',
+  api.pendingDeliveryLabel(2.7) === '2 条待确认', api.pendingDeliveryLabel(2.7))
+
+// 渲染结构：DOM 起不来，就钉在源码上（本文件一贯做法）
+check('buildRoom：任务板只在有条目时出现（空 → 整块不出现）',
+  buildSrc !== null && buildSrc.includes('var taskRows = taskRowsOf(room)')
+  && buildSrc.includes('if (taskRows.length > 0)'))
+// 块自己只负责画：从「取数据」到「切回抽屉」之间不许出现 rpc / 事件处理器
+const taskBlock = buildSrc === null ? '' : buildSrc.slice(
+  buildSrc.indexOf('var taskRows = taskRowsOf(room)'),
+  buildSrc.indexOf('if (drawer !== null) panel = drawer'))
+check('  任务板是只读的（块内没有 rpc 调用、也没有事件处理器）',
+  taskBlock.includes('taskLineOf(t)') && taskBlock.indexOf('rpc(') < 0 && taskBlock.indexOf('addEventListener') < 0,
+  taskBlock.length)
+check('  成员行挂上待确认标记（0 时拼出来还是原来那一行）',
+  buildSrc !== null && buildSrc.includes('pendingDeliveryLabel(m.pending)')
+  && buildSrc.includes("pendingBit === '' ? '' : ' · ' + pendingBit"))
+
+// 新表的变化不一定伴随消息：不进指纹，面板就会一直显示旧状态（数字说谎比没有数字更糟）
+const sigTasks = JSON.parse(JSON.stringify(base))
+sigTasks.rooms[0].tasks = [{ id: 't1', title: '任务', status: 'open', owner: null, updatedAt: 1 }]
+check('任务变化 → 指纹变（认领 / 完成都不产生消息）', api.signatureOf(sigTasks) !== sig1)
+const sigTaskTitle = JSON.parse(JSON.stringify(sigTasks))
+sigTaskTitle.rooms[0].tasks[0].title = '改了标题'
+check('  改标题也算变化', api.signatureOf(sigTaskTitle) !== api.signatureOf(sigTasks))
+const sigPend = JSON.parse(JSON.stringify(base))
+sigPend.rooms[0].members[0].pending = 2
+check('待确认数变化 → 指纹变（确认掉一条同样没有任何消息）', api.signatureOf(sigPend) !== sig1)
+const sigBad = JSON.parse(JSON.stringify(base))
+sigBad.rooms[0].tasks = 'nope'
+check('tasks 不是数组时指纹不炸（照旧算出字符串）', typeof api.signatureOf(sigBad) === 'string')
 
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')

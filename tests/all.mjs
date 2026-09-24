@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 const run = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repo = path.join(here, '..')
-const SUITES = ['smoke', 'host', 'panel', 'gitcheck', 'markdown', 'transport']
+const SUITES = ['smoke', 'host', 'panel', 'gitcheck', 'markdown', 'transport', 'invariants']
 
 async function git(args) {
   try {

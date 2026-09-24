@@ -188,8 +188,8 @@ const callsOf = (agent) => agent.calls
 
 console.log('1. 注册面')
 check('导出 name/inject', name === 'dsh-chatroom' && inject[0] === 'tools', { name, inject })
-check('注册了 8 个工具', registered.length === 8, registered.map((t) => t.name))
-for (const n of ['room_status', 'room_message', 'room_say', 'room_judge', 'room_declare_change', 'room_alert', 'room_intent', 'room_owners']) {
+check('注册了 9 个工具', registered.length === 9, registered.map((t) => t.name))
+for (const n of ['room_status', 'room_message', 'room_task', 'room_say', 'room_judge', 'room_declare_change', 'room_alert', 'room_intent', 'room_owners']) {
   check('工具存在: ' + n, tool(n) !== undefined)
   check('  ' + n + ' 有 output.render', typeof tool(n).output.render === 'function')
 }
@@ -973,6 +973,55 @@ check('  会话发的用 agent-message（带真实 senderSessionId）',
   allDelivered.some((d) => d.message.source.kind === 'agent-message' && typeof d.message.source.senderSessionId === 'string'))
 check('  人发的用 user（房间里没有 sessionId，不能编一个）',
   allDelivered.some((d) => d.message.source.kind === 'user'), '人的发言也要投给成员')
+
+console.log('15. 任务板 + 投递台账（A/B 两段的行为验收）')
+// 先给 A 一个**结构化边界**：任务里写了它的地盘时，要能**在建任务那一刻**就看到 ⚠（事前而不是事后）
+await tool('room_intent').execute({ room: roomId, direction: '只做审计，不改代码', paths: ['webui/**'] }, exec(A))
+const t15 = await tool('room_task').execute({
+  room: roomId, op: 'create', title: '加投递台账', expectPaths: ['webui/pages/static/js/chat.js'],
+}, exec(B))
+check('room_task create 成功', t15.ok === true && t15.text.includes('加投递台账'), t15.text)
+check('  **事前**越界：建任务时就把 A 的地盘点出来（不必等改完再事后对质）',
+  t15.text.includes('可能越界') && t15.text.includes('webui/pages/static/js/chat.js'), t15.text)
+check('  而且不制造提及/义务（任务板是分工，不是要谁表态）', !t15.text.includes('@'), t15.text)
+const tid15 = (t15.text.match(/task-\d+/) || [])[0]
+check('  拿到任务 id', typeof tid15 === 'string' && tid15 !== '', tid15)
+const list15 = await tool('room_task').execute({ room: roomId, op: 'list' }, exec(A))
+check('list 列出任务（含状态与归属）', list15.ok === true && list15.text.includes('加投递台账') && list15.text.includes('open'), list15.text)
+const claim15 = await tool('room_task').execute({ room: roomId, op: 'claim', taskId: tid15 }, exec(A))
+check('认领成功 → claimed', claim15.ok === true && claim15.text.includes('claimed'), claim15.text)
+const dup15 = await tool('room_task').execute({ room: roomId, op: 'claim', taskId: tid15 }, exec(B))
+check('  别人再认领 → 拒绝并说清原因', dup15.ok === false && dup15.text.includes('已被'), dup15.text)
+// 「校验失败不许改掉一半」：status 与非法 deps 同时给，任务必须**原样**（还是 claimed）
+const bad15 = await tool('room_task').execute({ room: roomId, op: 'update', taskId: tid15, status: 'done', deps: ['task-999'] }, exec(A))
+check('  非法依赖 → 拒绝', bad15.ok === false && bad15.text.includes('不存在'), bad15.text)
+const snap15 = (await rpc('state', {})).value.rooms.find((r) => r.room.id === roomId)
+const after15 = snap15.tasks.find((t) => t.id === tid15)
+check('  且**没有改掉一半**（状态仍是 claimed，不是 done）', after15.status === 'claimed', after15)
+check('  任务进了面板载荷（owner 已是短号）', after15.owner === A.id.slice(0, 8) || after15.owner === A.id.slice(8, 16), after15.owner)
+const done15 = await tool('room_task').execute({ room: roomId, op: 'update', taskId: tid15, status: 'done' }, exec(A))
+check('  合法 update → done', done15.ok === true && done15.text.includes('done'), done15.text)
+
+// ---- A 段：投递台账 + 确认 ----
+const pending15 = async (sid) => {
+  const sm = (await rpc('state', {})).value.rooms.find((r) => r.room.id === roomId)
+  const mm = sm.members.find((x) => x.sessionId === sid)
+  return mm === undefined ? -1 : mm.pending
+}
+// 相对量：前面的用例也会留下没确认的投递（这正是台账在干活），所以只能比**增量**
+const beforeA15 = await pending15(A.id)
+const beforeB15 = await pending15(B.id)
+const asked15 = await rpc('say', { roomId, text: '@' + A.id.slice(0, 8) + ' 台账验收：请回一句' })
+const av = asked15.value === undefined ? {} : asked15.value
+const seq15 = av.seq !== undefined ? av.seq : (av.message === undefined ? undefined : av.message.seq)
+check('发出一条点名的房间消息', typeof seq15 === 'number' && seq15 > 0, asked15.value)
+check('  被点名的人台账 +1', (await pending15(A.id)) === beforeA15 + 1, { beforeA15, now: await pending15(A.id) })
+// 注意：这条**不是**"只叫 @ 到的人" —— 人的发言按设计叫**全体**（BLUEPRINT §2.2），
+// 所以 B 也会 +1。测试把这个规则写下来，免得以后有人以为是漏投。
+check('  没被点名的人也 +1（人的发言按设计叫全体，不是漏投）',
+  (await pending15(B.id)) === beforeB15 + 1, { beforeB15, now: await pending15(B.id) })
+await tool('room_judge').execute({ room: roomId, seq: seq15, verdict: 'unaffected' }, exec(A))
+check('  它表态 = **确认**，台账清零', (await pending15(A.id)) === 0, await pending15(A.id))
 
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')

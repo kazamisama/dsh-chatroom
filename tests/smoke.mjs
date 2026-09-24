@@ -618,6 +618,85 @@ check('  行内 code / 代码块里的标记同样不算',
 check('  但**非引述**的括号标注照旧算（#55 的形状不能被引述规则误伤）',
   s23('@aaaa1111 顺带同步一下（不需要回应）').mentions.length === 0)
 
+console.log('20. 投递台账（借自 agent-team 的 mailbox：投递 · 确认 · 恢复）')
+// 真机形状：一条消息只投一次、投失败就永远丢了 —— 义务还挂在房间里，那个人**永远不知道**有人叫过它。
+const r20 = await store.createRoom({ name: '投递台账' })
+await store.join(r20.id, A, { roleName: '实现者' })
+const d1 = store.recordDelivery(r20.id, A, 101)
+check('记一笔投递', d1.seq === 101 && d1.deliveredAt === null && d1.attempts === 0, d1)
+check('  幂等：同一 (room, session, seq) 只留一条', store.recordDelivery(r20.id, A, 101) === d1
+  && store.pendingDeliveries(r20.id, A).length === 1, store.pendingDeliveries(r20.id, A))
+store.markDelivered(r20.id, A, 101)
+check('投出去了 → deliveredAt 有值（但不等于对方看过）', store.pendingDeliveries(r20.id, A)[0].deliveredAt !== null)
+store.failDelivery(r20.id, A, 101)
+check('  失败 → attempts 累加，留着给下一次补投', store.pendingDeliveries(r20.id, A)[0].attempts === 1)
+store.recordDelivery(r20.id, A, 102)
+check('按人过滤：只算自己的', store.pendingDeliveries(r20.id, A).length === 2, store.pendingDeliveries(r20.id, A).length)
+check('确认到 101 → 只销 ≤101 的那条', (await store.ackDelivery(r20.id, A, 101)) === 1
+  && store.pendingDeliveries(r20.id, A).length === 1
+  && store.pendingDeliveries(r20.id, A)[0].seq === 102, store.pendingDeliveries(r20.id, A))
+check('  确认是幂等的（再确认一次销 0 条）', (await store.ackDelivery(r20.id, A, 101)) === 0)
+check('  确认到 102 → 台账清零', (await store.ackDelivery(r20.id, A, 102)) === 1
+  && store.pendingDeliveries(r20.id, A).length === 0)
+
+console.log('21. 任务板（借自 agent-team 的 shared task DAG）')
+const r21 = await store.createRoom({ name: '任务板' })
+await store.join(r21.id, A, { roleName: '实现者' })
+await store.join(r21.id, B, { roleName: '评审' })
+const t1 = await store.createTask({ roomId: r21.id, title: '加台账', createdBy: A, expectPaths: ['dsh-chatroom/lib/rooms.js'] })
+check('建任务：默认 open、未认领', t1.status === 'open' && t1.owner === null && t1.id.startsWith('task-'), t1)
+check('  expectPaths 被清洗成机器读的形态', t1.expectPaths.join() === 'dsh-chatroom/lib/rooms.js', t1.expectPaths)
+const t2 = await store.createTask({ roomId: r21.id, title: '写测试', deps: [t1.id], owner: B })
+check('带依赖 + 指定负责人 → claimed', t2.status === 'claimed' && t2.owner === B && t2.deps.join() === t1.id, t2)
+check('依赖不存在 → 拒（不静默吞）',
+  await store.createTask({ roomId: r21.id, title: 'x', deps: ['task-999'] }).then(() => false, (e) => /不存在/.test(e.message)))
+check('依赖成环 → 拒', await store.updateTask(t1.id, { deps: [t2.id] }).then(() => false, (e) => /成环/.test(e.message)))
+check('  依赖自己 → 拒', await store.updateTask(t1.id, { deps: [t1.id] }).then(() => false, (e) => /不能依赖自己/.test(e.message)))
+check('认领别人的任务 → 拒', await store.claimTask(t2.id, A).then(() => false, (e) => /已被/.test(e.message)))
+check('认领无人任务 → ok 并转 claimed', (await store.claimTask(t1.id, A)).owner === A)
+check('状态必须是枚举里的（拼错就拒）',
+  await store.updateTask(t1.id, { status: 'done-ish' }).then(() => false, (e) => /未知状态/.test(e.message)))
+check('未知任务 → 拒', await store.updateTask('task-999', { status: 'done' }).then(() => false, (e) => /不存在/.test(e.message)))
+check('列出这个房间的任务', store.tasksFor(r21.id).length === 2, store.tasksFor(r21.id).length)
+check('  跨房间不会串', store.tasksFor(r20.id).length === 0)
+
+console.log('22. 两张新表跨重启存活（rooms.json 整份落盘 ⇒ 读回来还在）')
+const root22 = path.join(os.tmpdir(), 'dsh-chatroom-persist-' + Date.now())
+const store22 = createChatroomStore({ root: root22 })
+await store22.load()
+const room22 = await store22.createRoom({ name: '落盘' })
+await store22.join(room22.id, A)
+store22.recordDelivery(room22.id, A, 7)
+const task22 = await store22.createTask({ roomId: room22.id, title: '跨重启', expectPaths: ['a/b.js'] })
+const store22b = createChatroomStore({ root: root22 })
+await store22b.load()
+check('投递台账读回来了', store22b.pendingDeliveries(room22.id, A).length === 1
+  && store22b.pendingDeliveries(room22.id, A)[0].seq === 7, store22b.pendingDeliveries(room22.id, A))
+check('任务读回来了（含 expectPaths）', store22b.getTask(task22.id) !== null
+  && store22b.getTask(task22.id).expectPaths.join() === 'a/b.js', store22b.getTask(task22.id))
+check('  nextTaskId 也跟着走（不会重号）', (await store22b.createTask({ roomId: room22.id, title: '第二条' })).id !== task22.id)
+await fs.rm(root22, { recursive: true, force: true })
+
+console.log('23. 写入口的体检（不变量**真的在执行**，不只是模块存在）')
+// 这一节走的是 store 的公开入口 —— 也就是"坏数据到底进不进得来"，不是单元测那个模块本身。
+const r23 = await store.createRoom({ name: '不变量' })
+await store.join(r23.id, A)
+check('给非成员登记义务 → 被拒，且是 INVARIANT_ 前缀',
+  await store.appendMessage({ roomId: r23.id, sender: { user: true }, kind: 'human', body: 'x', mentions: ['session-nobody'] })
+    .then(() => false, (err) => /^INVARIANT_/.test(String(err.code))))
+const good23 = await store.appendMessage({ roomId: r23.id, sender: { user: true }, kind: 'human', body: 'y', mentions: [A] })
+check('  给成员登记义务 → 放行（别把好数据也拦住）', good23.seq > 0, good23.seq)
+check('回执指向不存在的 seq → 被拒',
+  await store.judge({ roomId: r23.id, seq: 99999, sessionId: A, verdict: 'unaffected' })
+    .then(() => false, (err) => /^INVARIANT_/.test(String(err.code))))
+check('非成员表态 → 被拒',
+  await store.judge({ roomId: r23.id, seq: good23.seq, sessionId: 'session-nobody', verdict: 'unaffected' })
+    .then(() => false, (err) => /^INVARIANT_/.test(String(err.code))))
+check('  合法表态 → 放行', await store.judge({ roomId: r23.id, seq: good23.seq, sessionId: A, verdict: 'unaffected' })
+  .then((j) => j.seq === good23.seq, () => false))
+check('坏消息没进 state（拒绝要在 push 之前）',
+  store.state.messages.filter((m) => m.body === 'x').length === 0, store.state.messages.filter((m) => m.body === 'x').length)
+
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
