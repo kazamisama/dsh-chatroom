@@ -529,6 +529,47 @@ const swClean = await verifyDeclaration({ workspace: repo, files: ['declared.py'
 check('ref 只改了声明的文件 → refExtra 为空', swClean.refExtra.length === 0, swClean.refExtra)
 check('  结论里也不出现这句（没噪音）', !describeVerification(swClean).includes('未声明的文件'), describeVerification(swClean))
 
+console.log('16. 「git 看不见这条路径」不许升级成撒谎档（真机 2026-09-25 #4831/#4832：data/** 被判「与事实不符」）')
+// 真机的形状：运行时的值（data/ 那种）被 .gitignore 排除 —— 它在磁盘上真实存在、status 里看不到、
+// 仓库里也没有它的历史。此时"自锚点以来无改动痕迹"**没有信息量**（git 结构上给不出痕迹），
+// 拿它判「与事实不符」= 用"看不见"当"没发生"。
+const ig = path.join(root, 'ignored-repo')
+await fs.mkdir(ig, { recursive: true })
+await git(ig, ['init', '-q'])
+await git(ig, ['config', 'user.email', 't@t.t'])
+await git(ig, ['config', 'user.name', 't'])
+await fs.writeFile(path.join(ig, 'tracked.py'), 'x = 1\n')
+await fs.writeFile(path.join(ig, '.gitignore'), 'data/\n')
+await git(ig, ['add', 'tracked.py', '.gitignore'])
+await git(ig, ['commit', '-qm', 'init'])
+await fs.mkdir(path.join(ig, 'data'), { recursive: true })
+await fs.writeFile(path.join(ig, 'data', 'runtime.json'), '{"v":1}\n')
+const igAnchor = Date.now() - 5 * 60 * 1000
+
+const igOnly = await verifyDeclaration({ workspace: ig, files: ['data/runtime.json'], anchorMs: igAnchor })
+check('被 .gitignore 排除的运行时文件 → 未证实（不是与事实不符）', igOnly.verdict === 'unverified', igOnly.verdict)
+check('  理由自成一档', igOnly.reason === 'declared-files-invisible-to-git', igOnly.reason)
+check('  判词里说清"git 看不见"、且带那句不是"没有改动"',
+  describeVerification(igOnly).includes('git 看不见这些路径') && describeVerification(igOnly).includes('不是"没有改动"'),
+  describeVerification(igOnly))
+check('  **不说**撒谎档那句', !describeVerification(igOnly).includes('与事实不符'), describeVerification(igOnly))
+
+// 混合：一半有 git 证据（真改了），一半 git 看不见 ⇒ 整份降为未证实，且说明另一半有证据
+await fs.writeFile(path.join(ig, 'tracked.py'), 'x = 2\n')
+const igMixed = await verifyDeclaration({ workspace: ig, files: ['tracked.py', 'data/runtime.json'], anchorMs: igAnchor })
+check('混合（改了跟踪文件 + 一个看不见的）→ 未证实', igMixed.verdict === 'unverified', igMixed.verdict + '/' + igMixed.reason)
+check('  并说明同一份声明里其余文件是有证据的', describeVerification(igMixed).includes('其余文件有 git 证据'), describeVerification(igMixed))
+
+// ★ 反向对照（防"一律放宽"）：**已跟踪、自锚点以来真的没动过** ⇒ 仍然是与事实不符
+// 用 .gitignore：它已入库、且这一节里**没有**再改过（tracked.py 上面被改脏了，那是"有证据"不是"没证据"）。
+const igTracked = await verifyDeclaration({ workspace: ig, files: ['.gitignore'], anchorMs: Date.now() + 60 * 60 * 1000 })
+check('★ 跟踪文件、自锚点以来没动过 → 仍是与事实不符（没被放宽掉）',
+  igTracked.verdict === 'contradicted' && igTracked.reason === 'no-declared-file-shows-any-change', igTracked.verdict + '/' + igTracked.reason)
+// ★ 又一条：**新写完的未跟踪文件**（没被 ignore）有 status 证据 ⇒ 仍是已证实
+await fs.writeFile(path.join(ig, 'brand-new.py'), 'y = 1\n')
+const igNew = await verifyDeclaration({ workspace: ig, files: ['brand-new.py'], anchorMs: igAnchor })
+check('★ 新写的未跟踪文件 → 仍是已证实（没把正常新文件误降档）', igNew.verdict === 'verified', igNew.verdict + '/' + igNew.reason)
+
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
