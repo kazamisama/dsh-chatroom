@@ -622,21 +622,25 @@ console.log('20. 投递台账（借自 agent-team 的 mailbox：投递 · 确认
 // 真机形状：一条消息只投一次、投失败就永远丢了 —— 义务还挂在房间里，那个人**永远不知道**有人叫过它。
 const r20 = await store.createRoom({ name: '投递台账' })
 await store.join(r20.id, A, { roleName: '实现者' })
-const d1 = store.recordDelivery(r20.id, A, 101)
-check('记一笔投递', d1.seq === 101 && d1.deliveredAt === null && d1.attempts === 0, d1)
-check('  幂等：同一 (room, session, seq) 只留一条', store.recordDelivery(r20.id, A, 101) === d1
+// 台账指向的必须是**真消息**：整状态体检会拦"投递账指向不存在的消息"（重试判定会永远漏掉那一条）。
+// 这条一开始就把我自己的合成夹具拦下来了 —— 于是这里改成先落两条真消息，再用它们的 seq。
+const m20a = await store.appendMessage({ roomId: r20.id, sender: { user: true }, kind: 'human', body: '第一条' })
+const m20b = await store.appendMessage({ roomId: r20.id, sender: { user: true }, kind: 'human', body: '第二条' })
+const d1 = store.recordDelivery(r20.id, A, m20a.seq)
+check('记一笔投递', d1.seq === m20a.seq && d1.deliveredAt === null && d1.attempts === 0, d1)
+check('  幂等：同一 (room, session, seq) 只留一条', store.recordDelivery(r20.id, A, m20a.seq) === d1
   && store.pendingDeliveries(r20.id, A).length === 1, store.pendingDeliveries(r20.id, A))
-store.markDelivered(r20.id, A, 101)
+store.markDelivered(r20.id, A, m20a.seq)
 check('投出去了 → deliveredAt 有值（但不等于对方看过）', store.pendingDeliveries(r20.id, A)[0].deliveredAt !== null)
-store.failDelivery(r20.id, A, 101)
+store.failDelivery(r20.id, A, m20a.seq)
 check('  失败 → attempts 累加，留着给下一次补投', store.pendingDeliveries(r20.id, A)[0].attempts === 1)
-store.recordDelivery(r20.id, A, 102)
+store.recordDelivery(r20.id, A, m20b.seq)
 check('按人过滤：只算自己的', store.pendingDeliveries(r20.id, A).length === 2, store.pendingDeliveries(r20.id, A).length)
-check('确认到 101 → 只销 ≤101 的那条', (await store.ackDelivery(r20.id, A, 101)) === 1
+check('确认到第一条 → 只销 ≤ 它的那条', (await store.ackDelivery(r20.id, A, m20a.seq)) === 1
   && store.pendingDeliveries(r20.id, A).length === 1
-  && store.pendingDeliveries(r20.id, A)[0].seq === 102, store.pendingDeliveries(r20.id, A))
-check('  确认是幂等的（再确认一次销 0 条）', (await store.ackDelivery(r20.id, A, 101)) === 0)
-check('  确认到 102 → 台账清零', (await store.ackDelivery(r20.id, A, 102)) === 1
+  && store.pendingDeliveries(r20.id, A)[0].seq === m20b.seq, store.pendingDeliveries(r20.id, A))
+check('  确认是幂等的（再确认一次销 0 条）', (await store.ackDelivery(r20.id, A, m20a.seq)) === 0)
+check('  确认到第二条 → 台账清零', (await store.ackDelivery(r20.id, A, m20b.seq)) === 1
   && store.pendingDeliveries(r20.id, A).length === 0)
 
 console.log('21. 任务板（借自 agent-team 的 shared task DAG）')
@@ -666,12 +670,13 @@ const store22 = createChatroomStore({ root: root22 })
 await store22.load()
 const room22 = await store22.createRoom({ name: '落盘' })
 await store22.join(room22.id, A)
-store22.recordDelivery(room22.id, A, 7)
+const seedMsg22 = await store22.appendMessage({ roomId: room22.id, sender: { user: true }, kind: 'human', body: '落盘用' })
+store22.recordDelivery(room22.id, A, seedMsg22.seq)
 const task22 = await store22.createTask({ roomId: room22.id, title: '跨重启', expectPaths: ['a/b.js'] })
 const store22b = createChatroomStore({ root: root22 })
 await store22b.load()
 check('投递台账读回来了', store22b.pendingDeliveries(room22.id, A).length === 1
-  && store22b.pendingDeliveries(room22.id, A)[0].seq === 7, store22b.pendingDeliveries(room22.id, A))
+  && store22b.pendingDeliveries(room22.id, A)[0].seq === seedMsg22.seq, store22b.pendingDeliveries(room22.id, A))
 check('任务读回来了（含 expectPaths）', store22b.getTask(task22.id) !== null
   && store22b.getTask(task22.id).expectPaths.join() === 'a/b.js', store22b.getTask(task22.id))
 check('  nextTaskId 也跟着走（不会重号）', (await store22b.createTask({ roomId: room22.id, title: '第二条' })).id !== task22.id)
@@ -696,6 +701,33 @@ check('  合法表态 → 放行', await store.judge({ roomId: r23.id, seq: good
   .then((j) => j.seq === good23.seq, () => false))
 check('坏消息没进 state（拒绝要在 push 之前）',
   store.state.messages.filter((m) => m.body === 'x').length === 0, store.state.messages.filter((m) => m.body === 'x').length)
+
+console.log('24. persist() 的整状态体检：fail-closed，且不把历史当坏数据')
+// 这一节测的是**咽喉**：默认验、且验不过就**不写盘**（盘上留上一份好状态）。
+const root24 = path.join(os.tmpdir(), 'dsh-chatroom-gate-' + Date.now())
+const store24 = createChatroomStore({ root: root24 })
+await store24.load()
+const room24 = await store24.createRoom({ name: '体检' })
+await store24.join(room24.id, A)
+await store24.appendMessage({ roomId: room24.id, sender: { user: true }, kind: 'human', body: '好数据' })
+const file24 = path.join(root24, 'rooms.json')
+const good24 = await fs.readFile(file24, 'utf8')
+check('好数据：落盘成功', good24.includes('好数据'))
+// 直接把坏数据塞进内存（绕开公开写入口），再让它落盘 —— 必须被拦，且**盘上那份不能被改坏**
+store24.state.messages.push({ seq: 999999, roomId: 'room-does-not-exist', sender: { user: true }, kind: 'human', body: '坏数据', refs: [], terminal: false, ts: 1 })
+let gate24 = null
+try { await store24.persist() } catch (err) { gate24 = err }
+check('坏状态 → persist() 抛错（fail-closed）', gate24 !== null && String(gate24.code).startsWith('INVARIANT_'), gate24 && gate24.code)
+check('  盘上那份**没有被改坏**（还停在上一份好状态）', (await fs.readFile(file24, 'utf8')) === good24)
+check('  原因进了 stateError（room_status 会把它说出来）',
+  typeof store24.stateError() === 'string' && store24.stateError().includes('没有写盘'), store24.stateError())
+// 删房间会留下历史消息（removeRoom 只清 rooms/members）—— 那是历史，不该被判成坏数据
+store24.state.messages.pop()   // 把刚塞的坏数据去掉，只留"真历史"
+await store24.removeRoom(room24.id)
+check('删房间留下的历史消息 → 照样能落盘（历史不是坏数据）', (await store24.persist()) === undefined || true)
+check('  房间没了，消息还在（历史是有意留的）',
+  store24.state.messages.some((m) => m.body === '好数据'), store24.state.messages.length)
+await fs.rm(root24, { recursive: true, force: true })
 
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
