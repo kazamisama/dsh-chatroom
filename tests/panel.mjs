@@ -54,6 +54,8 @@ const NAMES = [
   'recentStats',
   // 任务板 + 投递台账（宿主新加的两张表：字段缺失 / 不是数组 / 元素缺字段都要容错）
   'taskStatusLabel', 'taskRowsOf', 'taskLineOf', 'pendingDeliveryLabel',
+  // 「这个面板自己花了多少」的一行读数（宿主载荷的 ms.build + 本机停摆探针的**同一窗口**计数）
+  'fmtMs', 'numOrNull', 'usageLineOf',
 ]
 const missing = NAMES.filter((n) => extractFunction(src, n) === null)
 if (missing.length > 0) {
@@ -539,6 +541,17 @@ check('什么都没有 → 两行都空（调用方据此显示"未声明边界"
   api.directionLineOf({}).text === '' && api.directionLineOf({}).bound === '',
   api.directionLineOf({}))
 check('undefined 不炸', api.directionLineOf(undefined).bound === '')
+// 观察者席位的边界文案（2026-09-16 更正）：宿主侧 detectOverreach **不看 watch** ——
+// 它只跳过 enabled === false 的成员与声明者本人。所以 watch=all 只要给了 paths 就照样参与越界判定，
+// 旧文案「不参与越界判定」是**与事实不符**的（宿主侧 index.js 的同款文案先改掉了这一处）。
+check('观察者席位：收全量变更，领地仍按它给的 paths 算',
+  api.directionLineOf({ watch: 'all', paths: ['a.js'] }).bound === '观察者席位（收全量变更；领地按它给的 paths 算）',
+  api.directionLineOf({ watch: 'all', paths: ['a.js'] }).bound)
+// 行为钉（不是源码 grep）：注释里可以引旧话，但**返回给用户的那一行**不许再把那句话带回来。
+check('  旧说法（观察者不参与越界判定）不许从任何 watch 取值里回来',
+  ['all', 'wake', 'feed', 'none', undefined].every(function (w) {
+    return api.directionLineOf({ watch: w, paths: ['a.js'], selfDescription: '我负责前端' }).bound.indexOf('不参与') < 0
+  }))
 
 console.log('22. recentStats —— 拉取的分布（2026-09-16 方案 a：最大值读不出形状）')
 const nowS = Date.now()
@@ -640,6 +653,67 @@ check('待确认数变化 → 指纹变（确认掉一条同样没有任何消�
 const sigBad = JSON.parse(JSON.stringify(base))
 sigBad.rooms[0].tasks = 'nope'
 check('tasks 不是数组时指纹不炸（照旧算出字符串）', typeof api.signatureOf(sigBad) === 'string')
+
+console.log('24. usageLineOf —— 「这个面板自己花了多少」的一行读数（宿主 ms.build + 本机停摆探针）')
+// 全齐：宿主构建这一屏的 ms（载荷字段 room.ms.build） + 本页停摆（次数与最坏值**同窗口**：自加载）
+const usageFull = api.usageLineOf({ ms: { build: 15 } }, { total: 3, worst: 1200 })
+check('两个数都在 → 一行两段（中都分隔）',
+  usageFull === '用量 宿主 15ms · 停摆 3 次/本页(最坏 1.2s)', usageFull)
+// 窗口必须写在文案里：头部那行的停摆是「最近 5 分钟」（recentJank 现算），这一行是「自加载」。
+// 两个窗口混着读会得出相反的结论 —— 2026-09-16 那次「9 小时前停了 9 次」就是这么来的。
+check('  窗口写进文案（自加载 ≠ 头部那行的「最近 5 分钟」）', usageFull.includes('次/本页'), usageFull)
+check('  长时长换成秒（380px 的状态行才放得下）',
+  api.usageLineOf({ ms: { build: 2400 } }).includes('2.4s'), api.usageLineOf({ ms: { build: 2400 } }))
+check('只有 payload（刚打开面板、探针还没记录）→ 只报宿主那一段',
+  api.usageLineOf({ ms: { build: 12 } }) === '用量 宿主 12ms', api.usageLineOf({ ms: { build: 12 } }))
+check('只有本机计数（老宿主没有 ms 字段）→ 只报停摆那一段',
+  api.usageLineOf(null, { total: 2, worst: 900 }) === '用量 停摆 2 次/本页(最坏 900ms)',
+  api.usageLineOf(null, { total: 2, worst: 900 }))
+check('  停摆 0 次 → 这一格不出现（0 是噪声，不是读数）',
+  api.usageLineOf({}, { total: 0, worst: 0 }) === '', api.usageLineOf({}, { total: 0, worst: 0 }))
+check('  有次数没有最坏值（半份数据）→ 次数照报，括号整段不写',
+  api.usageLineOf({}, { total: 4 }) === '用量 停摆 4 次/本页', api.usageLineOf({}, { total: 4 }))
+check('  小数次数取整（次数只可能是整数，万一是小数也别显示半个）',
+  api.usageLineOf({}, { total: 2.7 }) === '用量 停摆 2 次/本页', api.usageLineOf({}, { total: 2.7 }))
+// 缺失 / 非数 / 负数 → **整行不显示**：这是这一行最重要的性质（宁可不说，也不打一个 undefined）
+check('缺 ms / ms 为 null / build 缺失 → 空串',
+  api.usageLineOf({}, {}) === '' && api.usageLineOf({ ms: null }, {}) === ''
+  && api.usageLineOf({ ms: {} }, {}) === '' && api.usageLineOf({ ms: { build: null } }, {}) === '',
+  [api.usageLineOf({}, {}), api.usageLineOf({ ms: {} }, {}), api.usageLineOf({ ms: { build: null } }, {})])
+check('非数（字符串 / 布尔 / 对象 / 数组）→ 空串',
+  api.usageLineOf({ ms: { build: '15' } }, {}) === ''
+  && api.usageLineOf({ ms: { build: true } }, {}) === ''
+  && api.usageLineOf({ ms: { build: {} } }, {}) === ''
+  && api.usageLineOf({ ms: { build: [15] } }, {}) === '',
+  api.usageLineOf({ ms: { build: '15' } }, {}))
+check('负数 → 空串（读数里不许出现 -3ms）',
+  api.usageLineOf({ ms: { build: -3 } }, {}) === ''
+  && api.usageLineOf({ ms: { build: -1 } }, { total: -2, worst: -5 }) === '',
+  api.usageLineOf({ ms: { build: -3 } }, {}))
+check('NaN / ±Infinity → 空串',
+  api.usageLineOf({ ms: { build: NaN } }, {}) === ''
+  && api.usageLineOf({ ms: { build: Infinity } }, {}) === ''
+  && api.usageLineOf({ ms: { build: -Infinity } }, {}) === ''
+  && api.usageLineOf({}, { total: NaN, worst: Infinity }) === '',
+  api.usageLineOf({}, { total: NaN, worst: Infinity }))
+check('undefined / null 输入不炸（room 与 stats 都可以缺）',
+  api.usageLineOf(undefined, undefined) === '' && api.usageLineOf(null, null) === ''
+  && api.usageLineOf(undefined, { total: 1 }) === '用量 停摆 1 次/本页')
+check('任何输入都不会把 undefined / NaN 打出来',
+  [usageFull, api.usageLineOf(undefined, undefined), api.usageLineOf({ ms: { build: NaN } }, { total: NaN }),
+    api.usageLineOf({}, { total: 4 }), api.usageLineOf({ ms: { build: 2400 } }, {})]
+    .every((s) => s.indexOf('undefined') < 0 && s.indexOf('NaN') < 0))
+// 渲染结构：DOM 起不来，就钉在源码上（本文件一贯做法）
+check('buildRoom：这一行真的画进状态行，且空串时一个节点都不加',
+  buildSrc !== null && buildSrc.includes('usageLineOf(room, { total: jankTotal, worst: jankAllWorstMs })')
+  && buildSrc.includes("if (usage !== '') bar.appendChild(el('span', S.weak, usage))"))
+check('  位置在状态行里（成员数之后、切换标签之前）—— 不为它新开一节',
+  buildSrc !== null && buildSrc.indexOf('usageLineOf(room, {') > buildSrc.indexOf("' 名成员'")
+  && buildSrc.indexOf('usageLineOf(room, {') < buildSrc.indexOf('var tabs = el('))
+check('  两个数都是现成的：载荷字段 room.ms.build + 探针的累计窗口（不新增 RPC 字段、不另立计数器）',
+  src.includes('room.ms.build') && buildSrc !== null
+  && buildSrc.includes('total: jankTotal, worst: jankAllWorstMs')
+  && !src.includes('usageRpcField') && !src.includes('usageCounter'))
 
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')

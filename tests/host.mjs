@@ -338,7 +338,9 @@ const beforeA = callsOf(A).length
 const beforeB = callsOf(B).length
 const beforeE = callsOf(E).length
 const declared = await tool('room_declare_change').execute(
-  { room: roomId, files: ['app.py'], summary: '把 parse_cfg 改成读环境变量', symbols: ['parse_cfg'] },
+  // notify:'contract' —— 这条测试守的是"确定性匹配决定谁被叫醒"（路由相关性），
+  // 而 2026-09-25 起 routine 默认档**不再**让相关成员必须回。要测路由就必须显式要这一档。
+  { room: roomId, files: ['app.py'], summary: '把 parse_cfg 改成读环境变量', symbols: ['parse_cfg'], notify: 'contract' },
   exec(A),
 )
 // 假工作区 D:proj 不存在 → gitcheck 返回 unverified（而不是 contradicted）——
@@ -473,9 +475,11 @@ const askState = (await rpc('state', {})).value.rooms.find((r) => r.room.id === 
 const bOwes = (askState.pendingDetail || []).find((d) => d.sessionId === B.id) || { seqs: [] }
 check('room_status 说清他欠哪几条（按人，最老在前）',
   bOwes.seqs.length > 0 && stAsk.text.includes('最老 #' + bOwes.seqs[0]), { bOwes: bOwes.seqs, text: stAsk.text })
-check('  待表态一行带短号，并明说提醒不会自动重发',
+// 这句能力说明 2026-09-25 变了：逾期提醒（"追"）上线后，"不会自动重发提醒"成了假话。
+// 断言必须跟着**实现**走，否则它守的就是一段幻觉。
+check('  待表态一行带短号，并说清逾期提醒的真实规则（会追、有冷却与上限）',
   stAsk.text.includes('待表态:') && stAsk.text.includes('1b68df32')
-  && stAsk.text.includes('不会自动重发提醒'), stAsk.text)
+  && stAsk.text.includes('逾时的会由插件自动提醒') && stAsk.text.includes('最多 3 次'), stAsk.text)
 const judgeReply = await tool('room_judge').execute(
   { room: mroomId, seq: askedSeq, verdict: 'catch-up', note: '我接 API 半' }, exec(B))
 check('B 表态成功', judgeReply.ok === true, judgeReply)
@@ -524,7 +528,10 @@ const wakesOf = (agent, from) => callsOf(agent).slice(from).filter((c) => c.mode
 // ① 都没声明边界 → 同工作区兜底（旧行为，故意保留：没声明是它自己的洞）
 let b0 = callsOf(B).length
 let e0 = callsOf(E).length
-await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/app.py'], summary: '改 app.py' }, exec(A))
+await tool('room_declare_change').execute(
+  { room: bRoomId, files: ['ulysses/app.py'], summary: '改 app.py', notify: 'contract' },
+  exec(A),
+)
 check('① 没声明边界 → 同工作区的 B 被兜底唤醒（旧行为）', wakesOf(B, b0) === 1, callsOf(B).slice(b0).map((c) => c.mode))
 check('   跨工作区且文件不存在于它的工作区 → E 不叫', wakesOf(E, e0) === 0, callsOf(E).slice(e0).map((c) => c.mode))
 
@@ -826,8 +833,9 @@ const humState1 = (await rpc('state', {})).value.rooms.find((r) => r.room.id ===
 const owesHum1 = (humState1.pendingDetail || [])
   .filter((d) => (d.seqs || []).includes(humSeq1)).map((d) => d.shortId)
 check('人发言不 @ → **全体**都欠这条（判据取自载荷，不看文案）', owesHum1.length > 1, owesHum1)
-check('  且 room_status 的表尾明说提醒不会自动重发',
-  stHum1.text.includes('待表态:') && stHum1.text.includes('不会自动重发提醒'), stHum1.text)
+check('  且 room_status 的表尾说清逾期提醒的真实规则（不再是"不会自动重发"）',
+  stHum1.text.includes('待表态:') && stHum1.text.includes('逾时的会由插件自动提醒')
+  && !stHum1.text.includes('不会自动重发'), stHum1.text)
 hum = await rpc('say', { roomId: bRoomId, text: '@1b68df32 只看你这一份' })
 const humSeq2 = hum.value.message.seq
 const stHum2 = await tool('room_status').execute({ room: bRoomId }, exec(A))
@@ -1263,6 +1271,89 @@ check('  ★ 拒的是**写入**，不只是返回值：一条消息都没留下
   { before: before19, after: await cnt19() })
 const goodStill = await tool('room_say').execute({ room: bRoomId, text: '正常一条' }, exec(A))
 check('  反向对照：正常正文照发（别把好数据也拦了）', goodStill.seq > 0, goodStill)
+
+console.log('20. 回执档位（用户 2026-09-25 裁定"改"）：routine 不登记义务，contract/irreversible 才登记')
+const tierRoom = await rpc('create-room', { name: '档位' })
+const tierRoomId = tierRoom.value.room.room.id
+await rpc('join', { roomId: tierRoomId, sessionId: A.id, roleName: '实现者' })
+await rpc('join', { roomId: tierRoomId, sessionId: B.id, roleName: '审计员' })
+await rpc('join', { roomId: tierRoomId, sessionId: E.id, roleName: '观察者' })
+await tool('room_intent').execute(
+  { room: tierRoomId, direction: '【面】收全量。【不碰】无。【纪律】逐条核。【收录】all', watch: 'all' }, exec(E))
+const tB = callsOf(B).length
+const tE = callsOf(E).length
+const routineDecl = await tool('room_declare_change').execute(
+  { room: tierRoomId, files: ['ulysses/app.py'], summary: 'routine 默认档' }, exec(A))
+// ⚠ 这里原本写的是"B 收到 inject（背景投递）"—— **错了**：skipInject 对 quiet（默认档）是
+// 「一律走拉」，不推任何东西。所以 routine 档对 B 的准确描述是：**不欠、也不推，靠 room_status 拉**。
+// （这一条正是"背景投递"这个词最容易骗人的地方：它对 all/feed/wake 是推，对 quiet 是拉。）
+check('routine 档：B 既不欠、也不推（quiet 默认档靠拉 —— skipInject 那一层的契约）',
+  callsOf(B).length === tB, callsOf(B).slice(tB).map((c) => c.mode))
+const routineRead = await tool('room_message').execute({ room: tierRoomId, seq: routineDecl.seq }, exec(A))
+check('  ★ 而且房间里**看不到** B 被点名（义务集是空的，不是只在投递层少发了一帧）',
+  !routineRead.text.includes(shortOf(B.id)), routineRead.text.slice(0, 240))
+check('★ watch=all 的席位在 routine 档下**照样必须回**（它自己声明的合约，不由作者降档）',
+  callsOf(E).slice(tE).some((c) => c.mode === 'followup'), callsOf(E).slice(tE).map((c) => c.mode))
+const cB = callsOf(B).length
+const contractDecl = await tool('room_declare_change').execute(
+  { room: tierRoomId, files: ['ulysses/app.py'], summary: '契约档', notify: 'contract' }, exec(A))
+check('contract 档：B 被叫醒且必须回（followup）',
+  callsOf(B).slice(cB).some((c) => c.mode === 'followup'), callsOf(B).slice(cB).map((c) => c.mode))
+const contractRead = await tool('room_message').execute({ room: tierRoomId, seq: contractDecl.seq }, exec(A))
+check('  与 routine 形成对照：这条里 B 确实被点名了',
+  contractRead.text.includes(shortOf(B.id)) && contractRead.text.includes('〔契约〕'),
+  contractRead.text.slice(0, 240))
+const irrevDecl = await tool('room_declare_change').execute(
+  { room: tierRoomId, files: ['ulysses/app.py'], summary: '不可逆档', notify: 'irreversible' }, exec(A))
+check('irreversible 档：带〔不可逆〕标记',
+  (await tool('room_message').execute({ room: tierRoomId, seq: irrevDecl.seq }, exec(A))).text.includes('〔不可逆〕'))
+check('  非法档位值**退回 routine**（不报错、也不假装收下）',
+  (await tool('room_declare_change').execute(
+    { room: tierRoomId, files: ['ulysses/app.py'], summary: '乱填档', notify: 'whatever' }, exec(A))).seq > 0)
+
+console.log('21. 逾期提醒（"追"）：只追逾期、冷却 30 分钟、最多 3 次、feed/none 不追')
+const remRoom = await rpc('create-room', { name: '提醒' })
+const remRoomId = remRoom.value.room.room.id
+await rpc('join', { roomId: remRoomId, sessionId: A.id, roleName: '实现者' })
+await rpc('join', { roomId: remRoomId, sessionId: B.id, roleName: '审计员' })
+await rpc('join', { roomId: remRoomId, sessionId: E.id, roleName: '只收不答' })
+await tool('room_intent').execute(
+  { room: remRoomId, direction: '【面】只读。【不碰】无。【纪律】无。【收录】feed（看得见但别叫醒我）', watch: 'feed' },
+  exec(E))
+const owed = await tool('room_say').execute({ room: remRoomId, text: '@' + shortOf(B.id) + ' 这条你要回一句' }, exec(A))
+// 提醒巡检被 apply 注册成 effect，测试拿它的 tick 钩子 —— 定时器不该决定"这条能不能被测"（不用等 20 秒）。
+const remindTick = effects.find((x) => String(x.label).includes('逾期提醒')).d.tick
+const HOUR = 60 * 60 * 1000
+const rB = callsOf(B).length
+const rE = callsOf(E).length
+check('还没逾期（刚发出去）⇒ 不追', (await remindTick()).length === 0)
+const future = Date.now() + HOUR
+// ⚠ 把"现在"往前跳一小时，**全库**所有还没回的义务都会一起变逾期（测试库里前面十几个房间全在里面）。
+// 所以每条断言都必须**按本房间收窄** —— 数总数会把别的房间的欠账算进来，那是假绿也是假红。
+const mine = (list) => list.filter((s) => s.roomId === remRoomId)
+const first = await remindTick(future)
+check('逾期后追一次：followup，且说清**欠的是哪一条**',
+  mine(first).length === 1 && mine(first)[0].sessionId === B.id && mine(first)[0].seq === owed.seq
+  && callsOf(B).slice(rB).some((c) => c.mode === 'followup' && c.message.content[0].text.includes('逾期提醒')),
+  { mine: mine(first), modes: callsOf(B).slice(rB).map((c) => c.mode) })
+// E 是别的房间的成员，那边逾期也会追它 ⇒ 不能拿"E 有没有被叫醒"当判据（那是全库的量）。
+// 只能问：**与本房间有关**的提醒里有没有它。
+check('  ★ 声明 feed（看得见但别叫醒我）的席位**不追** —— 那是它自己的合约',
+  !mine(first).some((s) => s.sessionId === E.id)
+  && !callsOf(E).slice(rE).some((c) => c.message.source && c.message.source.roomId === remRoomId),
+  { mine: mine(first), eCalls: callsOf(E).slice(rE).length })
+check('冷却期内不重复追（30 分钟）', mine(await remindTick(future + 5 * 60 * 1000)).length === 0)
+check('冷却过后追第 2 次', mine(await remindTick(future + 31 * 60 * 1000)).length === 1)
+check('再冷却过后追第 3 次', mine(await remindTick(future + 62 * 60 * 1000)).length === 1)
+check('★ 到上限（3 次）后**不再追** —— 把"他不回"变成可见的事实，而不是继续敲',
+  mine(await remindTick(future + 93 * 60 * 1000)).length === 0)
+const remStatus = await tool('room_status').execute({ room: remRoomId }, exec(A))
+check('  ★ 追了几次是**可读的事实**（room_status 上能看到），不是隐藏在暗处的动作',
+  remStatus.text.includes('已自动提醒 3 次'), remStatus.text.split('\n').filter((l) => l.includes('自动提醒')))
+const remStatus2 = await tool('room_status').execute({ room: remRoomId }, exec(A))
+check('  表尾的能力说明跟着实现改了（不再说"不会自动重发提醒"）',
+  remStatus2.text.includes('逾时的会由插件自动提醒') && !remStatus2.text.includes('不会自动重发'),
+  remStatus2.text.split('\n').filter((l) => l.includes('待表态')))
 
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
