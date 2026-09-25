@@ -1165,6 +1165,19 @@ const goodDir = '【面】负责人工核验。\n【不碰】无。\n【纪律�
 const goodIntent = await tool('room_intent').execute({ room: bRoomId, direction: goodDir, watch: 'quiet' }, exec(E))
 check('P6 合规 ⇒ 明说通过（不是沉默 —— 沉默没法证明它看过）',
   goodIntent.text.includes('形状 ✓'), goodIntent.text)
+// 真机形状的复刻（cdfc696d #5099 的端到端负向测试）：**四条判据同时踩** ——
+// 前三段超出 200 字（【收录】落在 259）、正文 418 字、日期 + #seq + file:line、以及「更正我上一条」。
+// 他用自己当探针（先发违规、同一次调用里立刻恢复合规），所以这条输入值得长期钉住。
+// ⚠ 长度要**真的**越过 400（第一版只写了 250 个 A ⇒ 全串 328 字 ⇒ "标准 ≤400" 那条没触发，
+// 而当时我以为是判据漏了 —— 构造错了会让"判据没咬"和"没到阈值"长得一模一样）。
+const realShape = '【面】' + 'A'.repeat(350) + '\n【不碰】无。\n【纪律】无。\n【收录】watch=quiet。'
+  + ' 更正我上一条：2026-09-25 我改了 #5052 与 docs/x.md:12。'
+const realIntent = await tool('room_intent').execute({ room: bRoomId, direction: realShape, watch: 'quiet' }, exec(E))
+console.log('   [复刻输入的提示原文] ' + realIntent.text)
+check('P6 四条判据同时踩 ⇒ 四条提示都要出现（少一条就是漏）',
+  realIntent.text.includes('前 200 字里缺') && realIntent.text.includes('【不碰】')
+  && realIntent.text.includes('标准 ≤400') && realIntent.text.includes('会腐烂的引用')
+  && realIntent.text.includes('历史叙述'), realIntent.text)
 
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
