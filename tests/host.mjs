@@ -1347,6 +1347,19 @@ check('冷却过后追第 2 次', mine(await remindTick(future + 31 * 60 * 1000)
 check('再冷却过后追第 3 次', mine(await remindTick(future + 62 * 60 * 1000)).length === 1)
 check('★ 到上限（3 次）后**不再追** —— 把"他不回"变成可见的事实，而不是继续敲',
   mine(await remindTick(future + 93 * 60 * 1000)).length === 0)
+// ★ 档位落到**结构化记录**里（不是只写在正文里）：否则既不可测也不可审（实测按正文 grep 会误判）。
+const persisted = JSON.parse(await fs.readFile(path.join(HOME, 'rooms.json'), 'utf8'))
+const tierOfDecl = (seq) => {
+  const c = (persisted.changes || []).find((x) => x.seq === seq)
+  return c === undefined ? '(无记录)' : c.tier
+}
+check('★ 档位结构化落账：contract 声明的记录里 tier=contract',
+  tierOfDecl(contractDecl.seq) === 'contract', { seq: contractDecl.seq, tier: tierOfDecl(contractDecl.seq) })
+check('  ★ 默认档落成 routine（不是 undefined，也不是靠正文标记反推）',
+  tierOfDecl(routineDecl.seq) === 'routine', { seq: routineDecl.seq, tier: tierOfDecl(routineDecl.seq) })
+check('  ★ irreversible 也是原值', tierOfDecl(irrevDecl.seq) === 'irreversible',
+  { seq: irrevDecl.seq, tier: tierOfDecl(irrevDecl.seq) })
+
 const remStatus = await tool('room_status').execute({ room: remRoomId }, exec(A))
 check('  ★ 追了几次是**可读的事实**（room_status 上能看到），不是隐藏在暗处的动作',
   remStatus.text.includes('已自动提醒 3 次'), remStatus.text.split('\n').filter((l) => l.includes('自动提醒')))
