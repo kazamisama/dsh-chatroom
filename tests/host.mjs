@@ -1355,6 +1355,46 @@ check('  表尾的能力说明跟着实现改了（不再说"不会自动重发�
   remStatus2.text.includes('逾时的会由插件自动提醒') && !remStatus2.text.includes('不会自动重发'),
   remStatus2.text.split('\n').filter((l) => l.includes('待表态')))
 
+console.log('22. 投递帧的正文预算：存储全文 / 投递有预算 / 截断带出口（#5169 的帧太长，实测 1249 字里 526 是插件自己加的）')
+const storedOf = async (roomId) => (await rpc('state', {})).value.rooms.find((r) => r.room.id === roomId).messages
+const longBody = 'X'.repeat(2000)
+const bigSay = await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(B.id) + ' 正文预算测试 ' + longBody }, exec(A))
+// 缺帧要**红**，不能让测试崩 —— 崩掉的那次我拿不到诊断信息（这条纪律今晚已经吃过一次）。
+// 别按 seq 找帧：投递层的消息对象里 seq 是 null（它没有稳定 seq，只有内容 —— 实测这一版的诊断）。
+const bigFrames = callsOf(B).filter((c) => c.message.content[0].text.includes('正文预算测试'))
+const frameText = bigFrames.length === 0
+  ? '(B 没有收到这条的帧 —— room_say #' + bigSay.seq + '；B 最近 4 帧：'
+    + JSON.stringify(callsOf(B).slice(-4).map((c) => [c.mode, c.message && c.message.seq])) + '）'
+  : bigFrames.pop().message.content[0].text
+// 断言锚在**被截的那个对象**上（正文的 X 串到底发了多少个），不是"整串长度 < N"——
+// 后者会被"没收到帧"的诊断串空过（这一版我自己就写错过一次）。
+// 数字从**存储的那条正文**里推：X 前面还有 "@短号 正文预算测试 " 那段前缀，
+// 第一版我按"X 恰好 800 个"写，把正确的实现判红了（切点在前缀之后 ⇒ 783）。
+const storedBig = (await storedOf(bRoomId)).find((m) => m.seq === bigSay.seq).body
+const xStart = storedBig.indexOf('X')
+const sentXs = (frameText.match(/X+/) || [''])[0].length
+check('★ 送进别人上下文的那一帧正文被截在预算上（切点 = 预算 − 前缀，两边都从对象里推）',
+  sentXs === 800 - xStart && frameText.includes('正文共'), { sentXs, xStart, frameLen: frameText.length })
+check('  ★ 截断**给了出口**：写清原文多少字、用哪个工具读全',
+  frameText.includes('正文共 ' + storedBig.length + ' 字') && frameText.includes('全文用 room_message(seq=' + bigSay.seq + ') 读'),
+  frameText.slice(0, 60) + ' … ' + frameText.slice(-120))
+check('  ★ 而**房间记录仍是全文**（存储是账，被截的只能是投递的那一份）',
+  (await storedOf(bRoomId)).find((m) => m.seq === bigSay.seq).body.length > 2000,
+  (await storedOf(bRoomId)).find((m) => m.seq === bigSay.seq).body.length)
+const longDir = '【面】长方向回显测试。\n【不碰】无。\n【纪律】' + 'Y'.repeat(560) + '\n【收录】quiet。'
+await tool('room_intent').execute({ room: bRoomId, direction: longDir, watch: 'quiet' }, exec(A))
+const longDecl = await tool('room_declare_change').execute(
+  { room: bRoomId, files: ['ulysses/app.py'], summary: '长方向回显测试' }, exec(A))
+const declBody = (await storedOf(bRoomId)).find((m) => m.seq === longDecl.seq).body
+// 边界两侧都钉：**前 200 字在、第 201 字不在**。（数 Y 的个数是错的 —— 前 200 字里还含【面】那几行，
+// 所以 Y 只剩 177；我第一版就是按"Y 恰好 200"写的，把正确的实现判红了。）
+check('★ 声明正文里的方向回显**恰好**截在 200 字（前 200 字在、第 201 字不在）',
+  declBody.includes(longDir.slice(0, 200)) && !declBody.includes(longDir.slice(0, 201))
+  && declBody.includes('全文 room_status'),
+  { bodyLen: declBody.length, dirLen: longDir.length, has200: declBody.includes(longDir.slice(0, 200)) })
+check('  且前 200 字确实留下了——不是把方向整段丢掉',
+  declBody.includes('长方向回显测试'), declBody.slice(0, 200))
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
