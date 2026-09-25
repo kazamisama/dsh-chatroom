@@ -964,9 +964,12 @@ check('  按**判据指纹**盖章，不取「前 20 条」（否则新假红会
 // 837e0518 #3634③ + #3638②：章若只是"手工 +1 的常量"就会忘；而只盖 lib/gitcheck.js 又漏掉
 // index.js 这边装配的判据（锚点 / ref / 路由 —— #1454/#1458 修的**正是**这里）。
 // 所以章是**复合**的：两段自动挡（gitcheck 字节 + rejudgeInputs 源码）+ 一段手工挡（兜底/扳机）。
-check('  章在 lib/rejudge.js 里装配（两段自动挡 + 一段手工挡）',
+// 2026-09-25 补第三段自动挡（**施判者** index.js）：那一笔修的是写回逻辑，章没变 ⇒ 已盖章的记录
+// 一条都没重判过，承诺的降档条数是 0。教训与 #3638② 同形，只是从"输入装配"挪到了"施判者"。
+check('  章在 lib/rejudge.js 里装配（三段自动挡 + 一段手工挡）',
   rejudgeSrc.includes('export function rejudgeStamp()')
-  && rejudgeSrc.includes("(criteriaFingerprint() || 'g0') + '|' + assemblyFingerprint() + '|v' + REJUDGE_VERSION"),
+  && rejudgeSrc.includes("assemblyFingerprint() + '|' + applierFingerprint()")
+  && rejudgeSrc.includes('export function applierFingerprint('),
   rejudgeSrc.slice(rejudgeSrc.indexOf('export function rejudgeStamp'), rejudgeSrc.indexOf('export function rejudgeStamp') + 200))
 check('  自动挡覆盖 index.js 那边的判据：锚点/ref/路由都在 rejudgeInputs 里，模块字节进章',
   inputsAt > 0 && inputsBlock.includes("ref: typeof change.ref === 'string'")

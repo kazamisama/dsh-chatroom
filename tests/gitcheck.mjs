@@ -9,7 +9,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
 import { verifyDeclaration, describeVerification, toRelative, resolveWorktree, criteriaFingerprint } from '../lib/gitcheck.js'
-import { REJUDGE_VERSION, assemblyFingerprint, rejudgeInputs, rejudgeStamp } from '../lib/rejudge.js'
+import { REJUDGE_VERSION, assemblyFingerprint, applierFingerprint, rejudgeInputs, rejudgeStamp } from '../lib/rejudge.js'
 
 const run = promisify(execFile)
 
@@ -480,9 +480,17 @@ const gPart = 'g' + createHash('sha256')
   .update(await fs.readFile(new URL('../lib/gitcheck.js', import.meta.url))).digest('hex').slice(0, 12)
 const iPart = 'i' + createHash('sha256')
   .update(await fs.readFile(new URL('../lib/rejudge.js', import.meta.url))).digest('hex').slice(0, 8)
-check('章 = g[gitcheck 字节] | i[重判模块字节] | v[手工挡]（逐段独立算出来对账）',
-  stamp === gPart + '|' + iPart + '|v' + REJUDGE_VERSION, { stamp, want: gPart + '|' + iPart + '|v' + REJUDGE_VERSION })
-check('  两段自动挡都真的在章里', stamp.split('|')[0] === gPart && stamp.split('|')[1] === iPart, stamp)
+// 第三段自动挡（2026-09-25 加的）：**施判者** lib/index.js 的字节。
+// 少了它，"判据没变、写回逻辑变了"那一类修复永远不会被重判 —— 实测降档条数为 0。
+const aPart = 'a' + createHash('sha256')
+  .update(await fs.readFile(new URL('../lib/index.js', import.meta.url))).digest('hex').slice(0, 8)
+check('章 = g[gitcheck 字节] | i[重判模块字节] | a[施判者字节] | v[手工挡]（逐段独立算出来对账）',
+  stamp === gPart + '|' + iPart + '|' + aPart + '|v' + REJUDGE_VERSION,
+  { stamp, want: gPart + '|' + iPart + '|' + aPart + '|v' + REJUDGE_VERSION })
+check('  三段自动挡都真的在章里',
+  stamp.split('|')[0] === gPart && stamp.split('|')[1] === iPart && stamp.split('|')[2] === aPart, stamp)
+check('  施判者那一段真的接上了（applierFingerprint 就是 index.js 的摘要）',
+  applierFingerprint() === aPart, { got: applierFingerprint(), want: aPart })
 const rejudgeCopy = path.join(root, 'rejudge-copy.js')
 await fs.writeFile(rejudgeCopy, Buffer.concat([
   await fs.readFile(new URL('../lib/rejudge.js', import.meta.url)), Buffer.from('\n// 判据改了一个字节\n'),
