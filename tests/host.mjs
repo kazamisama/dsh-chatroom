@@ -760,6 +760,21 @@ const decl176 = await tool('room_declare_change').execute({ room: bRoomId, files
 check('  同源：声明也叫醒 2 人（冷会话照样进名单）', decl176.text.includes('已唤醒 2 名'), decl176.text)
 void w0
 
+// 提案 B / P2（真机 #4866/#4870）：**越界判定也要带工作区** —— 同一个相对路径、不同工作区的成员，
+// 不该收到 ⚠（DORMANT 的 `ulysses/app.py` 在 D:\other，A 声明的是 D:\proj 那一份）。
+const p2decl = await tool('room_declare_change').execute({ room: bRoomId, files: ['ulysses/app.py'], summary: 'P2：异工作区不误伤' }, exec(A))
+const p2msg = await tool('room_message').execute({ room: bRoomId, seq: p2decl.seq }, exec(A))
+const warn176 = (p2msg.text.split('\n').find((l) => l.includes('可能越界')) || '')
+check('P2 异工作区的成员**不在 ⚠ 行里**（同 token、不同仓库）',
+  warn176 !== '' && !warn176.includes(shortOf(DORMANT)), warn176)
+check('  同工作区 / 工作区未知的成员照旧收到 ⚠（判定没被砍空）',
+  warn176.includes(shortOf(F.id)) && warn176.includes(shortOf(C.id)), warn176)
+// 提案 B / P3：裸文件名 token（没有 `/`）**当场回给作者**，而不是等它变成别人帧里的 ⚠。
+const bareIntent = await tool('room_intent').execute(
+  { room: bRoomId, direction: '裸名边界试试', paths: ['README.md'], watch: 'quiet' }, exec(E))
+check('P3 裸文件名 token 当场回给作者（带例子与两种写法）',
+  bareIntent.text.includes('没有 `/`') && bareIntent.text.includes('docs/README.md'), bareIntent.text)
+
 console.log('8.95 **作者撤回** —— 事后销账（真机 #2131③）')
 // 背景：@ 被抑制后重发成新 seq，原 seq 的债会永久留在旧账里；目标只能白花一轮去 judge 它。
 // 现在给作者一个机器动作：room_say({ retracts: [seq] })。

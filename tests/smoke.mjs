@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   createChatroomStore, shortId, parseMentions, parseMentionsScoped, ownedPaths, detectOverreach, saysNoReply, VERDICTS,
-  structuredPaths, memberOwnership, matchesOwnedPath, suspectGlobs, cleanPathList, DIRECTION_MAX_CHARS,
+  structuredPaths, memberOwnership, matchesOwnedPath, suspectGlobs, bareTokens, cleanPathList, DIRECTION_MAX_CHARS,
   extraFilesOwnerNote,
 } from '../lib/rooms.js'
 
@@ -503,8 +503,12 @@ check('那句散文不再把 store.py 算成它的地盘（⚠ 的假阳性来�
   matchesOwnedPath('tests/runtime/memory/test_stream_fill_real_store.py', mouthful.owned) === null,
   mouthful.owned.map((x) => x.token))
 check('  而同一个文件对**没给 paths** 的成员仍按散文命中（兜底那条路没被砍）',
-  matchesOwnedPath('tests/runtime/memory/test_stream_fill_real_store.py',
+  matchesOwnedPath('ulysses/core/store.py',
     memberOwnership({ selfDescription: 'store.py 的 schema/DDL 归我' }).owned) !== null)
+// 夹具换过一个：原来这里是 `tests/runtime/memory/test_stream_fill_real_store.py` ——
+// 它靠的是**半文件名**（`…_real_store.py` 以 `store.py` 结尾）命中，正是 2026-09-25 提案 B / P1
+// 要去掉的那一类（真机 #4866/#4870 的 `README.md`、以及 `test_webui_*` 撞名）。
+// 意图（散文兜底还在）用**目录边界**表达同样成立：token `store.py` 命中 `ulysses/core/store.py` ✓。
 check('  正负一起只看机器那份：有 paths 时散文里的「不碰」也不参与',
   memberOwnership({ paths: ['ulysses/core/**'], excludes: [], selfDescription: '不碰 dashboard.css' }).excluded.length === 0)
 const ownB = memberOwnership({ selfDescription: '不碰 dashboard.css；负责 ulysses/app.py' })
@@ -526,6 +530,42 @@ const overExcl = detectOverreach(['dashboard.css'], [
   { sessionId: 'other', paths: ['dashboard.css'], excludes: ['dashboard.css'] },
 ], 'me')
 check('自己声明不碰的 → 不算越界（排除优先）', overExcl.length === 0, overExcl)
+
+console.log('21b. 边界要带**工作区**、且不许半文件名命中（提案 B / P1·P2，真机 #4866/#4870）')
+// P1：删掉 `f.endsWith(t)` 那一支之后 —— 半文件名不再命中，目录边界照旧
+check('P1 `webui_auth.py` 不再命中 `tests/unit/test_webui_auth.py`（半文件名）',
+  matchesOwnedPath('tests/unit/test_webui_auth.py', structuredPaths(['webui_auth.py'])) === null,
+  matchesOwnedPath('tests/unit/test_webui_auth.py', structuredPaths(['webui_auth.py'])))
+check('  目录边界照旧命中（`docs/README.md` 与"短路径命中长路径" `app.py`）',
+  matchesOwnedPath('docs/README.md', structuredPaths(['docs/README.md'])) !== null
+  && matchesOwnedPath('ulysses/app.py', structuredPaths(['app.py'])) !== null)
+check('  多段后缀照旧（`lib/rooms.js` 命中 `dsh-chatroom/lib/rooms.js`）',
+  matchesOwnedPath('dsh-chatroom/lib/rooms.js', structuredPaths(['lib/rooms.js'])) !== null)
+// P2：工作区不同的成员**不参与判定**
+const wsMember = { sessionId: 'sibling-owner', paths: ['README.md'] }
+const wsMap = new Map([['sibling-owner', 'C:/Users/x/Documents/workspace/ulysses']])
+check('P2 兄弟仓的文件不再命中本仓成员的 `README.md`（同 token、异工作区）',
+  detectOverreach(['dsh-ulysses-mcp/README.md'], [wsMember], 'me', {
+    declarerWorkspace: 'D:/dsh_dev/dsh-ulysses-mcp', memberWorkspaces: wsMap,
+  }).length === 0)
+check('  **同工作区**照旧命中（没把判定砍空）',
+  detectOverreach(['docs/README.md'], [wsMember], 'me', {
+    declarerWorkspace: 'C:/Users/x/Documents/workspace/ulysses', memberWorkspaces: wsMap,
+  }).length === 1)
+check('  任一侧工作区**未知** ⇒ 照旧判定（未知是"查不到"，不是"不在"）',
+  detectOverreach(['docs/README.md'], [wsMember], 'me', { declarerWorkspace: '', memberWorkspaces: wsMap }).length === 1
+  && detectOverreach(['docs/README.md'], [wsMember], 'me', { declarerWorkspace: 'D:/x', memberWorkspaces: new Map() }).length === 1)
+check('  没传工作区（老调用方）⇒ 完全照旧（向后兼容）',
+  detectOverreach(['dsh-ulysses-mcp/README.md'], [wsMember], 'me').length === 1)
+check('  大小写/分隔符差异不算"不同工作区"（Windows 上同一目录的两种写法）',
+  detectOverreach(['docs/README.md'], [wsMember], 'me', {
+    declarerWorkspace: 'c:\\users\\x\\documents\\workspace\\ulysses', memberWorkspaces: wsMap,
+  }).length === 1)
+// P3：裸名 token 挑得出来（回给作者的那句话靠它）
+check('P3 bareTokens 只挑没有 `/` 的（`README.md`/`app.py` 挑出；`docs/README.md`、`a/**`、`a*.py` 不挑）',
+  JSON.stringify(bareTokens(['README.md', 'docs/README.md', 'dsh-chatroom/**', 'a*.py', 'app.py']))
+  === JSON.stringify(['README.md', 'app.py']),
+  bareTokens(['README.md', 'docs/README.md', 'dsh-chatroom/**', 'a*.py', 'app.py']))
 
 console.log('22. 方向存全文、不再静默截断（setSelfDescription）')
 const dRoom = await store.createRoom({ name: '方向长度' })
