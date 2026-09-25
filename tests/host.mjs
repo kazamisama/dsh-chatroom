@@ -1080,7 +1080,7 @@ check('  非法依赖 → 拒绝', bad15.ok === false && bad15.text.includes('�
 const snap15 = (await rpc('state', {})).value.rooms.find((r) => r.room.id === roomId)
 const after15 = snap15.tasks.find((t) => t.id === tid15)
 check('  且**没有改掉一半**（状态仍是 claimed，不是 done）', after15.status === 'claimed', after15)
-check('  任务进了面板载荷（owner 已是短号）', after15.owner === A.id.slice(0, 8) || after15.owner === A.id.slice(8, 16), after15.owner)
+check('  任务进了面板载荷（owner 已是短号）', after15.owner === shortOf(A.id), after15.owner)
 const done15 = await tool('room_task').execute({ room: roomId, op: 'update', taskId: tid15, status: 'done' }, exec(A))
 check('  合法 update → done', done15.ok === true && done15.text.includes('done'), done15.text)
 
@@ -1093,7 +1093,11 @@ const pending15 = async (sid) => {
 // 相对量：前面的用例也会留下没确认的投递（这正是台账在干活），所以只能比**增量**
 const beforeA15 = await pending15(A.id)
 const beforeB15 = await pending15(B.id)
-const asked15 = await rpc('say', { roomId, text: '@' + A.id.slice(0, 8) + ' 台账验收：请回一句' })
+// **不写 @**：人的发言按设计叫全体（BLUEPRINT §2.2）。
+// 反过来那条也在这里钉住了：一旦正文里有**有效**的 @，义务就收窄到那几个人（第一版这里写的是
+// `'@' + A.id.slice(0, 8)` = `@session-` —— 一个**无效**短号，于是"没人被 @ 到" ⇒ 走了全体那条路，
+// 断言看起来通过、其实测的不是它自己写的那件事）。
+const asked15 = await rpc('say', { roomId, text: '台账验收：请回一句' })
 const av = asked15.value === undefined ? {} : asked15.value
 const seq15 = av.seq !== undefined ? av.seq : (av.message === undefined ? undefined : av.message.seq)
 check('发出一条点名的房间消息', typeof seq15 === 'number' && seq15 > 0, asked15.value)
@@ -1126,6 +1130,22 @@ check('成员照常能用（别把好人也拦了）', !inStatus.text.includes('
 const snap16 = (await rpc('state', {})).value.rooms.find((r) => r.room.id === roomId)
 check('  非成员的发言没有在房间里留下任何消息',
   !JSON.stringify(snap16.messages).includes('非成员发言'), '房间里不该有它的声音')
+
+console.log('17. room_say 的返回要能读出「到底叫没叫到人」＋「谁被推成旧账」（214c26f9 #5017 ②③）')
+// P4：正文里 0 个 @ 时，旧返回只有「已发言 #N」—— 与「已唤醒」只差两个字，含义差"对方欠不欠回执"。
+const say17a = await tool('room_say').execute({ room: roomId, text: '只发背景，不点名' }, exec(A))
+check('P4 正文 0 个 @ ⇒ 返回里**写死** mentions: 0 / woke: 0',
+  say17a.text.includes('mentions: 0 / woke: 0') && say17a.text.includes('没有登记任何回执义务'), say17a.text)
+// P5：一条新 @ 把**房间靶子**推走 ⇒ 原来欠旧靶子的人仍欠、但不会再被唤醒（"旧账"）。返回里要说出来。
+const say17b = await tool('room_say').execute({ room: roomId, text: '@' + shortOf(B.id) + ' 看这条（P5）' }, exec(A))
+check('P5 第一条 @ 正常登记', say17b.text.includes('@ 了 1 人'), say17b.text)
+// ⚠ 短号一律用 shortOf()：`A.id`/`E.id` 带 `session-` 前缀，`.slice(0, 8)` 会切出 `session-`（第一版就是这么错的 ——
+// 那个 @ 无效、mentions 为 0，而测试看起来"通过"了）。B.id 恰好没有前缀，才让这处错误藏了一轮。
+const say17c = await tool('room_say').execute({ room: roomId, text: '@' + shortOf(E.id) + ' 换个人（把上面推成旧账）' }, exec(A))
+check('P5 第二条把靶子推走 ⇒ 返回里点出旧账、且**点名谁仍欠**、欠的是哪一条',
+  say17c.text.includes('旧账') && say17c.text.includes(shortOf(B.id)) && say17c.text.includes('#' + say17b.seq), say17c.text)
+check('  并给出补救动作（room_alert / 再 @ 一条）',
+  say17c.text.includes('room_alert'), say17c.text)
 
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')

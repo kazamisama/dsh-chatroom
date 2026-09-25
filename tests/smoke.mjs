@@ -557,6 +557,15 @@ check('  任一侧工作区**未知** ⇒ 照旧判定（未知是"查不到"，
   && detectOverreach(['docs/README.md'], [wsMember], 'me', { declarerWorkspace: 'D:/x', memberWorkspaces: new Map() }).length === 1)
 check('  没传工作区（老调用方）⇒ 完全照旧（向后兼容）',
   detectOverreach(['dsh-ulysses-mcp/README.md'], [wsMember], 'me').length === 1)
+// 214c26f9 #5017① 静态读出来的第二处调用点：`extraFilesOwnerNote`（ref 扫进来的文件的"范围提示"）
+// 原来也没传 opts。它**不登记义务**，但写错人同样是一条假提示 ⇒ 判据只有一套，两处必须传同样的 opts。
+check('P2 第二处调用点（extraFilesOwnerNote）也带工作区',
+  extraFilesOwnerNote(['dsh-ulysses-mcp/README.md'], [wsMember], 'me',
+    { declarerWorkspace: 'D:/dsh_dev/dsh-ulysses-mcp', memberWorkspaces: wsMap }) === ''
+  && extraFilesOwnerNote(['docs/README.md'], [wsMember], 'me',
+    { declarerWorkspace: 'C:/Users/x/Documents/workspace/ulysses', memberWorkspaces: wsMap }) !== '',
+  extraFilesOwnerNote(['docs/README.md'], [wsMember], 'me',
+    { declarerWorkspace: 'C:/Users/x/Documents/workspace/ulysses', memberWorkspaces: wsMap }))
 check('  大小写/分隔符差异不算"不同工作区"（Windows 上同一目录的两种写法）',
   detectOverreach(['docs/README.md'], [wsMember], 'me', {
     declarerWorkspace: 'c:\\users\\x\\documents\\workspace\\ulysses', memberWorkspaces: wsMap,
