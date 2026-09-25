@@ -6,8 +6,10 @@
  * 状态写进临时目录（DSH_CHATROOM_HOME），绝不碰真实房间数据。
  */
 import { promises as fs } from 'node:fs'
+import { execFile } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
+import { promisify } from 'node:util'
 
 const HOME = path.join(os.tmpdir(), 'dsh-chatroom-host-' + Date.now())
 process.env.DSH_CHATROOM_HOME = HOME
@@ -162,8 +164,36 @@ const SEED_CHANGE = {
   reason: 'no-worktree-found',
   ts: 1,
 }
+// 第二条种子：**降档**（把假红摘掉）也必须写回。真机 2026-09-25 照出来的洞：重判原来只有
+// `if (re.verdict !== VERIFIED) continue` ⇒ contradicted → 未证实 永远写不回去 ——
+// 判据修好了、章也盖了，旧红却仍挂在面上。要用真 git 仓库 + 被 .gitignore 排除的文件（真机 data/** 的形状）。
+const DOWN_REPO = path.join(os.tmpdir(), 'dsh-chatroom-down-' + Date.now())
+await fs.mkdir(path.join(DOWN_REPO, 'data'), { recursive: true })
+{
+  const runGit = promisify(execFile)
+  await runGit('git', ['-C', DOWN_REPO, 'init', '-q'], { windowsHide: true })
+  await runGit('git', ['-C', DOWN_REPO, 'config', 'user.email', 't@t.t'], { windowsHide: true })
+  await runGit('git', ['-C', DOWN_REPO, 'config', 'user.name', 't'], { windowsHide: true })
+  await fs.writeFile(path.join(DOWN_REPO, '.gitignore'), 'data/\n')
+  await fs.writeFile(path.join(DOWN_REPO, 'tracked.py'), 'x = 1\n')
+  await runGit('git', ['-C', DOWN_REPO, 'add', '.gitignore', 'tracked.py'], { windowsHide: true })
+  await runGit('git', ['-C', DOWN_REPO, 'commit', '-qm', 'init'], { windowsHide: true })
+  await fs.writeFile(path.join(DOWN_REPO, 'data', 'runtime.json'), '{}\n')
+}
+const SEED_DOWN = {
+  id: 'chg-rejudge-downgrade-seed',
+  seq: 999002,
+  roomId: 'room-rejudge-probe',
+  workspaceId: DOWN_REPO,
+  files: ['data/runtime.json'],
+  declaredBy: A.id,
+  ref: null,
+  verdict: 'contradicted',
+  reason: 'no-declared-file-shows-any-change',
+  ts: 1,
+}
 await fs.mkdir(HOME, { recursive: true })
-await fs.writeFile(path.join(HOME, 'rooms.json'), JSON.stringify({ version: 1, changes: [SEED_CHANGE] }), 'utf8')
+await fs.writeFile(path.join(HOME, 'rooms.json'), JSON.stringify({ version: 1, changes: [SEED_CHANGE, SEED_DOWN] }), 'utf8')
 
 apply(ctx)
 
@@ -180,6 +210,27 @@ for (let i = 0; i < 40 && seeded === null; i++) {
 check('重判盖的章**会落盘**（只盖在内存里 = 每次启动白跑一遍 · #3646 后的复验）',
   seeded !== null && seeded.rejudgedUnder === rejudgeStamp(),
   seeded === null ? '磁盘上一直没有 rejudgedUnder' : seeded.rejudgedUnder)
+
+// **降档也要写回**（真机 2026-09-25 · #4835③）：contradicted → 未证实 必须真的落到记录上，
+// 而不是"章盖了、判词和 reason 还是旧的"（那正是"改了颜色没改判据"的形状）。
+let downgraded = null
+for (let i = 0; i < 40 && downgraded === null; i++) {
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  try {
+    const raw = JSON.parse(await fs.readFile(path.join(HOME, 'rooms.json'), 'utf8'))
+    const found = (raw.changes || []).find((c) => c.id === SEED_DOWN.id)
+    if (found !== undefined && found.rejudgedUnder !== undefined) downgraded = found
+  } catch { /* 还没落盘 */ }
+}
+check('★ 重判**降档**也写回：假红（contradicted）被摘成未证实',
+  downgraded !== null && downgraded.verdict === 'unverified',
+  downgraded === null ? '记录没被重判到' : downgraded.verdict)
+check('★ 而且 reason **真的换成了新值**（不是只改颜色、留着旧 reason）',
+  downgraded !== null && downgraded.reason === 'declared-files-invisible-to-git',
+  downgraded === null ? '无' : downgraded.reason)
+check('  「从什么改成什么」记下来了（代码形态，供修复循环比较）',
+  downgraded !== null && downgraded.rejudgeFrom === 'contradicted'
+  && typeof downgraded.rejudgedAt === 'number', downgraded === null ? '无' : [downgraded.rejudgeFrom, downgraded.rejudgedAt])
 
 const rpc = (endpoint, payload) => rpcCalls.handler(endpoint, payload)
 const tool = (n) => registered.find((t) => t.name === n)
@@ -851,9 +902,25 @@ check('重判路径先按声明文件定位仓库',
 check('  重判同时收「与事实不符」与「未证实」两类',
   indexSrc.includes("c.verdict === 'contradicted' || c.verdict === 'unverified'"),
   '筛选条件里应当同时出现 contradicted 与 unverified')
+// 绊线只钉**意图**（former 在改写前读），不再钉那一行的字面量：2026-09-25 那一版把
+// "未证实"这个**标签**换成**代码**存进 rejudgeFrom（下面的修复循环按代码比较，两边才对得上），
+// 于是旧的字面量断言自己红了 —— 它钉的是实现细节，不是它想守的那件事。
 check('  「从什么改成什么」的 former 在改写前读（否则会写出 verified → 已证实 这种胡话）',
-  rejudgeBlock.includes("const from = change.verdict === 'unverified' ? '未证实' : 'contradicted'"),
-  rejudgeBlock.slice(0, 260))
+  (() => {
+    const fromAt = rejudgeBlock.indexOf('const from = change.verdict')
+    const writeAt = rejudgeBlock.indexOf('change.verdict = re.verdict')
+    return fromAt >= 0 && writeAt > fromAt
+  })(), rejudgeBlock.slice(0, 260))
+check('  判词用中文标签渲染（存代码、渲染标签，不混用）',
+  rejudgeBlock.includes('DECL_LABELS'), rejudgeBlock.slice(0, 260))
+// ★ 这一条钉的是 2026-09-25 修掉的那个洞（837e0518 #4835③ 让我核的）：
+// 原来只有 `if (re.verdict !== VERIFIED) continue` ⇒ contradicted → 未证实 永远写不回去，
+// 判据修好了、章也盖了，旧红仍挂在面上。行为层面由上面那条种子记录覆盖，这里钉死形状不许回退。
+// 判"旧那一行还在不在"时**必须带缩进**：注释里也引用了那句原文，只说 includes 会被自己的注释打红。
+check('★ 重判不只写回"翻成已证实"（降档也要写回，否则假红永不闭合）',
+  !rejudgeBlock.includes('\n        if (re.verdict !== VERIFIED) continue')
+  && rejudgeBlock.includes('if (re.verdict === change.verdict && re.reason === change.reason) continue'),
+  rejudgeBlock.slice(0, 300))
 check('  并把解析后的 workspace/files 交给 verifyDeclaration',
   inputsBlock.includes('workspace: resolved.workspace,') && inputsBlock.includes('files: resolved.files,')
   && rejudgeBlock.includes('await verifyDeclaration(inputs)'),
