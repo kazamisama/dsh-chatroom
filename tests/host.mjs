@@ -1455,6 +1455,10 @@ check('  ★ 证据明细**不进帧**（"（commit 覆盖）"这种留在存储
   { frameTail: digestFrame.slice(-140) })
 check('  ★ 但**行动指令照旧在**（摘要帧不能把"你必须回一句"也省掉）',
   digestFrame.includes('你必须回一句'), digestFrame.slice(-160))
+// 活机 #5222 实测：同一份文件在帧里出现两次、还是两种写法（作者的 'dsh-chatroom/lib/index.js' 与
+// 结构化的 'lib/index.js'）⇒ 看起来像两组不同的文件。修完应**恰好出现一次**。
+const hits = digestFrame.split('ulysses/app.py').length - 1
+check('  ★ 同一个文件在帧里**只出现一次**（作者正文那份 + 结构化那份不重复）', hits === 1, { hits })
 
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
