@@ -1373,8 +1373,8 @@ const frameText = bigFrames.length === 0
 const storedBig = (await storedOf(bRoomId)).find((m) => m.seq === bigSay.seq).body
 const xStart = storedBig.indexOf('X')
 const sentXs = (frameText.match(/X+/) || [''])[0].length
-check('★ 送进别人上下文的那一帧正文被截在预算上（切点 = 预算 − 前缀，两边都从对象里推）',
-  sentXs === 800 - xStart && frameText.includes('正文共'), { sentXs, xStart, frameLen: frameText.length })
+check('★ 送进别人上下文的那一帧正文被截成**头 + 尾**（头截在预算上，切点从对象里推）',
+  sentXs === 500 - xStart && frameText.includes('正文共'), { sentXs, xStart, frameLen: frameText.length })
 check('  ★ 截断**给了出口**：写清原文多少字、用哪个工具读全',
   frameText.includes('正文共 ' + storedBig.length + ' 字') && frameText.includes('全文用 room_message(seq=' + bigSay.seq + ') 读'),
   frameText.slice(0, 60) + ' … ' + frameText.slice(-120))
@@ -1394,6 +1394,23 @@ check('★ 声明正文里的方向回显**恰好**截在 200 字（前 200 字�
   { bodyLen: declBody.length, dirLen: longDir.length, has200: declBody.includes(longDir.slice(0, 200)) })
 check('  且前 200 字确实留下了——不是把方向整段丢掉',
   declBody.includes('长方向回显测试'), declBody.slice(0, 200))
+
+// 只截头会把**结论**吃掉：声明正文的判定（"git 校验 ✓ 已证实：…"）在末尾。
+const tailMarker = '【结论在尾部-必须活下来】'
+await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(B.id) + ' ' + 'Z'.repeat(1500) + tailMarker }, exec(A))
+const tailFrame = callsOf(B).filter((c) => c.message.content[0].text.includes('ZZZ')).pop().message.content[0].text
+check('★ 截断**保留尾部**（结论/判定在正文末尾 —— 只留头会把读者最需要的那句吃掉）',
+  tailFrame.includes(tailMarker), tailFrame.slice(-120))
+
+// ★ 帧里那份"收件人自己的方向"删掉了 —— 但**信息没丢**，它在收件人自己的系统提示词里（每次组装现算）。
+// 这一对断言必须一起看：只验"帧里没有"会让人以为功能没了。
+check('★ 帧里**不再**重复收件人自己的方向/边界（重复 + 快照会漂移）',
+  !frameText.includes('你声明过的方向') && !frameText.includes('你的机器可读边界'), frameText.slice(-160))
+const boundarySection = (B.sections || []).find((s) => s.name === 'chatroom:boundary')
+check('  ★ 而那信息**没有丢**：仍在收件人自己的系统提示词里（order 161，text() 每次组装现算）',
+  boundarySection !== undefined && boundarySection.text().includes('你的方向：')
+  && boundarySection.text().includes('你负责：'),
+  boundarySection === undefined ? '(没有注册边界段)' : boundarySection.text().slice(0, 160))
 
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
