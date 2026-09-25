@@ -1226,6 +1226,23 @@ check('★ 段首边界：第 200 字【纪律】算缺 —— 且**只点名它
 check('  提示里印了段首位置（作者可自查，而不是只知道"缺"）',
   badIdx.text.includes('从第 201 字才开始'), badIdx.text)
 
+// ★ cdfc696d #5148：**成员短号不是 sha** —— §9 的【纪律】恰好要求写「改什么之前先 @ 谁」，
+// 而房间寻址人的规范形式就是 8 位十六进制的短号（6126bf05 那种）⇒ 只按形状判，
+// 会把**每一条按标准写好【纪律】的声明**都判成"含会腐烂的引用"，而提示给的修法（改成文档小节号）对它不适用。
+// 修法：命中前先查现成花名册（判据能用名册就别靠形状猜）。
+const withShortId = '【面】负责人工核验。\n【不碰】app.py（归 ' + shortOf(E.id) + '）。\n【纪律】改 harness 消费的四处在动手前先 @ '
+  + shortOf(E.id) + '。\n【收录】watch=quiet。'
+const sidIntent = await tool('room_intent').execute({ room: bRoomId, direction: withShortId, watch: 'quiet' }, exec(E))
+check('★ 成员短号（8 位十六进制）**不**被当成 commit sha（#5148 的误报）',
+  !sidIntent.text.includes('会腐烂的引用'), sidIntent.text)
+check('  而且这条按标准写好的声明判成合规（形状 ✓）', sidIntent.text.includes('形状 ✓'), sidIntent.text)
+// 反向对照：**真的 sha**（本房间用的是 7 位短 sha）必须照旧报，而且**报出对象与位置**
+const withSha = '【面】负责人工核验。\n【不碰】无。\n【纪律】参照 ca84035 的做法，改前先 @ ' + shortOf(E.id) + '。\n【收录】watch=quiet。'
+const shaIntent = await tool('room_intent').execute({ room: bRoomId, direction: withSha, watch: 'quiet' }, exec(E))
+check('★ 真的 sha 照旧报（没被这次过滤误伤）', shaIntent.text.includes('会腐烂的引用'), shaIntent.text)
+check('  且**报出命中的对象与位置**（#5148 的 (c)：只说"有一处"作者改不动）',
+  shaIntent.text.includes('ca84035@第') && /ca84035@第 \d+ 字/.test(shaIntent.text), shaIntent.text)
+
 check('P6 四条判据同时踩 ⇒ 四条提示都要出现（少一条就是漏）',
   realIntent.text.includes('前 200 字里缺') && realIntent.text.includes('【不碰】')
   && realIntent.text.includes('标准 ≤400') && realIntent.text.includes('会腐烂的引用')
