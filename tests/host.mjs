@@ -467,9 +467,15 @@ console.log('8.5 「欠的是哪一条」与「他当时回了什么」（真机
 const asked = await tool('room_say').execute({ room: mroomId, text: '@1b68df32 请把 #1295 的回执再贴一次' }, exec(A))
 const askedSeq = asked.seq
 const stAsk = await tool('room_status').execute({ room: mroomId }, exec(A))
-check('room_status 说清欠的是哪一条', stAsk.text.includes('欠一次表态 #' + askedSeq), stAsk.text)
-check('  待表态一行也带 seq 与靶子',
-  stAsk.text.includes('待表态（靶子 #' + askedSeq + '）') && stAsk.text.includes('1b68df32'), stAsk.text)
+// 期望值从**同一份载荷**里取（不再手写 seq）—— 渲染端用的就是 pendingDetail.owedSeqs，
+// 断言直接对同一份数据，避免"我算的 seq"与"它报的 seq"各说各话（2026-09-25 起按人报最老那条）。
+const askState = (await rpc('state', {})).value.rooms.find((r) => r.room.id === mroomId)
+const bOwes = (askState.pendingDetail || []).find((d) => d.sessionId === B.id) || { seqs: [] }
+check('room_status 说清他欠哪几条（按人，最老在前）',
+  bOwes.seqs.length > 0 && stAsk.text.includes('最老 #' + bOwes.seqs[0]), { bOwes: bOwes.seqs, text: stAsk.text })
+check('  待表态一行带短号，并明说提醒不会自动重发',
+  stAsk.text.includes('待表态:') && stAsk.text.includes('1b68df32')
+  && stAsk.text.includes('不会自动重发提醒'), stAsk.text)
 const judgeReply = await tool('room_judge').execute(
   { room: mroomId, seq: askedSeq, verdict: 'catch-up', note: '我接 API 半' }, exec(B))
 check('B 表态成功', judgeReply.ok === true, judgeReply)
@@ -784,7 +790,8 @@ await rpc('join', { roomId: rcId, sessionId: A.id })
 await rpc('join', { roomId: rcId, sessionId: B.id })
 const said0 = await tool('room_say').execute({ room: rcId, text: '@1b68df32 你看一下这条' }, exec(A))
 let rcSt = await tool('room_status').execute({ room: rcId }, exec(A))
-check('@ 到的人欠这条', rcSt.text.includes('待表态（靶子 #' + said0.seq + '）') && rcSt.text.includes('1b68df32'),
+check('@ 到的人欠这条（逐人报他自己欠的那条）',
+  rcSt.text.includes('欠一次表态 #' + said0.seq) && rcSt.text.includes('1b68df32'),
   rcSt.text.split('\n').filter((l) => l.includes('待表态')).join(' | '))
 const bWake0 = callsOf(B).length
 const badRetract = await tool('room_say').execute({ room: rcId, text: '我想撤掉别人的', retracts: [said0.seq], wake: false }, exec(B))
@@ -815,14 +822,21 @@ console.log('8.8 人的发言也能定向（P5）与边界的可视化（P6）')
 let hum = await rpc('say', { roomId: bRoomId, text: '全体都看一下' })
 const humSeq1 = hum.value.message.seq
 const stHum1 = await tool('room_status').execute({ room: bRoomId }, exec(A))
-check('人发言不 @ → 全体欠（靶子就是这条）',
-  stHum1.text.includes('待表态（靶子 #' + humSeq1 + '）'), stHum1.text)
+const humState1 = (await rpc('state', {})).value.rooms.find((r) => r.room.id === bRoomId)
+const owesHum1 = (humState1.pendingDetail || [])
+  .filter((d) => (d.seqs || []).includes(humSeq1)).map((d) => d.shortId)
+check('人发言不 @ → **全体**都欠这条（判据取自载荷，不看文案）', owesHum1.length > 1, owesHum1)
+check('  且 room_status 的表尾明说提醒不会自动重发',
+  stHum1.text.includes('待表态:') && stHum1.text.includes('不会自动重发提醒'), stHum1.text)
 hum = await rpc('say', { roomId: bRoomId, text: '@1b68df32 只看你这一份' })
 const humSeq2 = hum.value.message.seq
 const stHum2 = await tool('room_status').execute({ room: bRoomId }, exec(A))
-const pendingLine = stHum2.text.split('\n').find((l) => l.includes('待表态（靶子 #' + humSeq2 + '）')) || ''
-check('人发言 @ 了谁 → 只叫谁（人数不再等于每条消息的成本）',
-  pendingLine.includes('1b68df32') && !pendingLine.includes('83d4e6de'), pendingLine)
+const humState2 = (await rpc('state', {})).value.rooms.find((r) => r.room.id === bRoomId)
+const owesHum2 = (humState2.pendingDetail || [])
+  .filter((d) => (d.seqs || []).includes(humSeq2)).map((d) => d.shortId)
+// 判据搬进载荷：文案里"谁出现在待表态行"会因为**别人**的陈欠而变，而"谁欠**这条**"才是被断言的那件事。
+check('人发言 @ 了谁 → 只有被 @ 的那位欠这条（人数不再等于每条消息的成本）',
+  owesHum2.length === 1 && owesHum2[0] === '1b68df32', owesHum2)
 check('room_status 把边界摆出来（谁负责哪些路径）',
   stHum2.text.includes('边界 ulysses/web/**'), stHum2.text.split('\n').filter((l) => l.includes('边界')).join(' | '))
 check('  未声明边界的人被标出来（它是边界图上的洞）',
@@ -1144,9 +1158,12 @@ const say17b = await tool('room_say').execute({ room: roomId, text: '@' + shortO
 check('P5 第一条 @ 正常登记', say17b.text.includes('@ 了 1 人'), say17b.text)
 // ⚠ 短号一律用 shortOf()：`A.id`/`E.id` 带 `session-` 前缀，`.slice(0, 8)` 会切出 `session-`（第一版就是这么错的 ——
 // 那个 @ 无效、mentions 为 0，而测试看起来"通过"了）。B.id 恰好没有前缀，才让这处错误藏了一轮。
-const say17c = await tool('room_say').execute({ room: roomId, text: '@' + shortOf(E.id) + ' 换个人（把上面推成旧账）' }, exec(A))
-check('P5 第二条把靶子推走 ⇒ 返回里点出旧账、且**点名谁仍欠**、欠的是哪一条',
-  say17c.text.includes('旧账') && say17c.text.includes(shortOf(B.id)) && say17c.text.includes('#' + say17b.seq), say17c.text)
+const say17c = await tool('room_say').execute({ room: roomId, text: '@' + shortOf(E.id) + ' 换个人（把上面推走）' }, exec(A))
+// 2026-09-25 后措辞按"提醒单位是人"重整：这里说的是**新 @ 不销旧账**（谁仍欠着上一条），
+// 而不再声称"你被推成旧账 ⇒ 以后没提醒了"—— 那句在投递层不成立（没有任何路径会自动重发提醒）。
+check('P5 第二条把靶子推走 ⇒ 返回里点出"谁仍欠上一条"、欠的是哪一条',
+  say17c.text.includes('仍欠 #' + say17b.seq) && say17c.text.includes(shortOf(B.id))
+  && say17c.text.includes('新 @ 不销旧账'), say17c.text)
 check('  并给出补救动作（room_alert / 再 @ 一条）',
   say17c.text.includes('room_alert'), say17c.text)
 
