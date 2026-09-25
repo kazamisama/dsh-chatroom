@@ -1150,6 +1150,22 @@ check('P5 第二条把靶子推走 ⇒ 返回里点出旧账、且**点名谁仍
 check('  并给出补救动作（room_alert / 再 @ 一条）',
   say17c.text.includes('room_alert'), say17c.text)
 
+console.log('18. 方向声明的四段标准：**受理时就地提示**（用户 2026-09-25 裁定 · 214c26f9 #5052 提案 P6）')
+// 标准（四段固定标签）：【面】【不碰】【纪律】【收录】；【面】【不碰】【纪律】必须落在**前 200 字**内
+// —— 因为唤醒帧只回显前 200 字，落在后面 = 别人读不到纪律、只读到故事。
+// 插件只**提示**、不改判定（用户明说）：不合标准照样受理、照样存全文。
+const badDir = '【面】我负责一些东西。' + 'A'.repeat(420) + ' 2026-09-25 我改了 #1234 与 lib/index.js:88'
+const badIntent = await tool('room_intent').execute({ room: bRoomId, direction: badDir, watch: 'quiet' }, exec(E))
+check('P6 缺段落在前 200 字内 ⇒ **点名**缺哪个', badIntent.text.includes('前 200 字里缺') && badIntent.text.includes('【不碰】'), badIntent.text)
+check('P6 超长 ⇒ 报实际字数与标准', badIntent.text.includes('标准 ≤400'), badIntent.text)
+check('P6 会腐烂的引用 ⇒ 点出来（日期 / sha / #seq / file:line）',
+  badIntent.text.includes('会腐烂的引用') && badIntent.text.includes('日期') && badIntent.text.includes('file:line'), badIntent.text)
+check('P6 **只提示、不拒**：照样受理（方向已存全文）', badIntent.text.includes('方向已记录'), badIntent.text)
+const goodDir = '【面】负责人工核验。\n【不碰】无。\n【纪律】改前先 @ 负责人。\n【收录】watch=quiet。'
+const goodIntent = await tool('room_intent').execute({ room: bRoomId, direction: goodDir, watch: 'quiet' }, exec(E))
+check('P6 合规 ⇒ 明说通过（不是沉默 —— 沉默没法证明它看过）',
+  goodIntent.text.includes('形状 ✓'), goodIntent.text)
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
