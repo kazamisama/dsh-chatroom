@@ -1493,6 +1493,10 @@ check('★ 非义务的帧（wake/背景）是**一行摘要 + 出口**，不是
 check('  对照：义务人拿到的是**头+尾**（他必须按内容判断，不能只看一行）',
   obligText.includes('只发头') && obligText.length > wakeText.length * 3,
   { wakeLen: wakeText.length, obligLen: obligText.length })
+// ★ 语义钉死（用户 2026-09-25 实测："貌似没唤醒"）：wake 席**只在变更上被叫醒**。
+// 普通发言 ⇒ inject（不唤醒）；声明 ⇒ wakeOnly followup（会唤醒，另有断言守「不要求回执」）。
+check('  ★ wake 席对**普通发言**是 inject（不唤醒）—— 与 feed 的差别只在"变更叫不叫醒"这一根轴',
+  pickFrame(callsOf(E), wakeFrom).mode === 'inject', pickFrame(callsOf(E), wakeFrom).mode)
 check('  ★ 存储仍是全文：压缩只发生在**送出去的那一份**',
   (await storedOf(bRoomId)).find((m) => m.seq === freeSeq).body.length > 1200,
   (await storedOf(bRoomId)).find((m) => m.seq === freeSeq).body.length)
