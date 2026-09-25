@@ -1248,6 +1248,22 @@ check('P6 四条判据同时踩 ⇒ 四条提示都要出现（少一条就是�
   && realIntent.text.includes('标准 ≤400') && realIntent.text.includes('会腐烂的引用')
   && realIntent.text.includes('历史叙述'), realIntent.text)
 
+console.log('19. 缺参数的正文不许变成字面量 "undefined"（真机 2026-09-25 #5149：一条 9 字符的 free 消息）')
+const cnt19 = async () => (await rpc('state', {})).value.rooms.find((r) => r.room.id === bRoomId).messages.length
+const before19 = await cnt19()
+const noText = await tool('room_say').execute({ room: bRoomId }, exec(A))
+check('room_say 缺 text ⇒ 拒（seq=0，且说清为什么）',
+  noText.seq === 0 && noText.text.includes('正文是空的') && noText.text.includes('undefined'), noText)
+const blankText = await tool('room_say').execute({ room: bRoomId, text: '   ' }, exec(A))
+check('  text 全是空白 ⇒ 同样拒', blankText.seq === 0, blankText)
+const noSummary = await tool('room_declare_change').execute({ room: bRoomId, files: ['app.py'] }, exec(A))
+check('room_declare_change 缺 summary ⇒ 拒（不能登记一份 "undefined" 的声明）',
+  noSummary.seq === 0 && noSummary.verdict === 'unknown' && noSummary.text.includes('summary 是空的'), noSummary)
+check('  ★ 拒的是**写入**，不只是返回值：一条消息都没留下', (await cnt19()) === before19,
+  { before: before19, after: await cnt19() })
+const goodStill = await tool('room_say').execute({ room: bRoomId, text: '正常一条' }, exec(A))
+check('  反向对照：正常正文照发（别把好数据也拦了）', goodStill.seq > 0, goodStill)
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
