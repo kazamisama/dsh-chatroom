@@ -1460,6 +1460,19 @@ check('  ★ 但**行动指令照旧在**（摘要帧不能把"你必须回一�
 const hits = digestFrame.split('ulysses/app.py').length - 1
 check('  ★ 同一个文件在帧里**只出现一次**（作者正文那份 + 结构化那份不重复）', hits === 1, { hits })
 
+console.log('23. 跨层判据的第二个方向：主语在**存储**的判据，不许从投影里读（#5231 ②）')
+// 反例网：正文里**恰好写着一句** "git ✓ 已证实"（那是作者的例子文字，投影里看得见），
+// 而这条声明的仓库不存在 ⇒ 存储里的判定是**未证实**。帧里的判定词若从投影（正文）推，就会说"已证实"。
+const layeredDecl = await tool('room_declare_change').execute({
+  room: tierRoomId,
+  files: ['ulysses/app.py'],
+  summary: '跨层反例：正文里写着 git ✓ 已证实 这句当例子，但这条声明的仓库不存在',
+}, exec(A))
+const layeredFrame = callsOf(E).slice(-1)[0].message.content[0].text
+check('★ 帧里的判定取自**存储**（change.verdict），不从正文里那句话推',
+  layeredFrame.includes('git ? 未证实') && !layeredFrame.includes('· git ✓ 已证实'),
+  { tail: layeredFrame.slice(-170) })
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
