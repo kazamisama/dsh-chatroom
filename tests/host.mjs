@@ -1473,6 +1473,30 @@ check('★ 帧里的判定取自**存储**（change.verdict），不从正文里
   layeredFrame.includes('git ? 未证实') && !layeredFrame.includes('· git ✓ 已证实'),
   { tail: layeredFrame.slice(-170) })
 
+console.log('24. 「看一眼」的帧压成一行（实测：审计席 2 小时 175 帧 / 10.5 万 tokens，其中 96% 不要求回执）')
+await rpc('set-enabled', { roomId: bRoomId, sessionId: E.id, enabled: true })
+await tool('room_intent').execute({ room: bRoomId, direction: '自动审计席（看一眼就走，不必回）', watch: 'wake' }, exec(E))
+const wakeFrom = callsOf(E).length
+const obligFrom = callsOf(B).length
+const longFree = '看一眼摘要测试 ' + 'Q'.repeat(1200)
+const freeSeq = (await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(B.id) + ' ' + longFree }, exec(A))).seq
+const pickFrame = (list, from) => list.slice(from)
+  .filter((c) => c.message.content[0].text.startsWith('[聊天室 ')).pop()
+const wakeText = pickFrame(callsOf(E), wakeFrom).message.content[0].text
+const obligText = pickFrame(callsOf(B), obligFrom).message.content[0].text
+// 这条走的是**背景注入**（free 消息对 wake 席＝"看得到但不打扰"），所以没有行动指令 ——
+// 「不要求回执」那半只属于声明的"看一眼" followup（另有断言守它）。这里守的是：**一行 + 出口**。
+check('★ 非义务的帧（wake/背景）是**一行摘要 + 出口**，不是整篇正文',
+  wakeText.length < 320 && wakeText.includes('room_message(seq=' + freeSeq + ')')
+  && !wakeText.includes('只发头') && !wakeText.includes('正文共'),
+  { len: wakeText.length, tail: wakeText.slice(-130) })
+check('  对照：义务人拿到的是**头+尾**（他必须按内容判断，不能只看一行）',
+  obligText.includes('只发头') && obligText.length > wakeText.length * 3,
+  { wakeLen: wakeText.length, obligLen: obligText.length })
+check('  ★ 存储仍是全文：压缩只发生在**送出去的那一份**',
+  (await storedOf(bRoomId)).find((m) => m.seq === freeSeq).body.length > 1200,
+  (await storedOf(bRoomId)).find((m) => m.seq === freeSeq).body.length)
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
