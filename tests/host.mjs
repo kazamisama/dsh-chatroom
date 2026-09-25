@@ -1514,6 +1514,30 @@ check('  ★ 存储仍是全文：压缩只发生在**送出去的那一份**',
   (await storedOf(bRoomId)).find((m) => m.seq === freeSeq).body.length > 1200,
   (await storedOf(bRoomId)).find((m) => m.seq === freeSeq).body.length)
 
+console.log('25. 摘要帧的**上界**（审计席结构性反例：join 无上限 ⇒ "帧长有上界"不成立）与"提醒送不出去"的可见性')
+const manyFiles = []
+for (let i = 0; i < 12; i++) manyFiles.push('ulysses/mod' + i + '/app.py')
+const manyDecl = await tool('room_declare_change').execute(
+  { room: tierRoomId, files: manyFiles, summary: '十二个文件的声明（试上界）' }, exec(A))
+const manyFrame = callsOf(E).slice(-1)[0].message.content[0].text
+check('★ 超过上限的文件清单被收成"前 N 个 + 共 M 个"（帧长因此**有界**）',
+  manyFrame.includes('…共 12 个') && manyFrame.length < 600,
+  { frameLen: manyFrame.length, has: manyFrame.includes('…共 12 个') })
+// ★ 失败可见：冷会话（不在 live 注册表里）拿不到提醒 ⇒ 不记账、但要留痕
+await rpc('join', { roomId: remRoomId, sessionId: C.id, roleName: '冷会话' })
+const coldSay = await tool('room_say').execute({ room: remRoomId, text: '@' + shortOf(C.id) + ' 这条是给冷会话的' }, exec(A))
+const far = Date.now() + 3 * 60 * 60 * 1000
+const sentFar = (await remindTick(far)).filter((s) => s.roomId === remRoomId && s.sessionId === C.id)
+check('★ 送不到时**不记账**（这一轮 sent 里 delivered=false，且 count 不动 ⇒ 下一轮继续试）',
+  sentFar.length === 1 && sentFar[0].delivered === false, sentFar)
+const persisted2 = JSON.parse(await fs.readFile(path.join(HOME, 'rooms.json'), 'utf8'))
+const coldRec = (persisted2.reminders || []).find((r) => r.seq === coldSay.seq)
+check('  ★ 但**留下可见的失败痕迹**（记录里 count=0、fails≥1 —— "不记账" ≠ "不记录"）',
+  coldRec !== undefined && coldRec.count === 0 && (coldRec.fails || 0) >= 1, coldRec)
+const coldStatus = await tool('room_status').execute({ room: remRoomId }, exec(A))
+check('  ★ 而且**在 room_status 上看得见**（失败不再只活在 debug 行里）',
+  coldStatus.text.includes('次送不出去'), coldStatus.text.split('\n').filter((l) => l.includes('送不出去')))
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
