@@ -1187,6 +1187,15 @@ const d400 = await tool('room_intent').execute({ room: bRoomId, direction: padTo
 const d401 = await tool('room_intent').execute({ room: bRoomId, direction: padTo(401), watch: 'quiet' }, exec(E))
 check('★ 长度边界：恰 400 字**不**报超长（判据不越界报错）', !d400.text.includes('标准 ≤400'), d400.text)
 check('★ 长度边界：401 字**报**超长（门槛真的在 400/401 之间）', d401.text.includes('标准 ≤400'), d401.text)
+// ★ 把「构造的长度」与「**工具自报的长度**」由同一条断言绑死（cdfc696d #5136）：
+// 上面两条断言的是**行为**（报/不报），而行为的绿可以由"构造恰好落在另一侧"产生 ——
+// 若哪天 head 里混进非 BMP 字符、而工具的口径换成码点，padTo(400) 就不再是 400，
+// 上面两条**照样绿**，边界却悄悄漂到 399（＝"判据没咬"与"没到阈值"长得一样那一族）。
+// 这三处今天都用 UTF-16 长度（padTo / 工具自报的「共 N 字」/ 阈值判断），但"恰好相等"不算钉住 ——
+// 这条断言把"相等"变成**被断言的**：谁的计数器变了，这里当场红。
+check('★ 构造的长度 == 工具自报的字数（段首那一对则由「从第 201 字才开始」锚住）',
+  d400.text.includes('共 400 字') && d401.text.includes('共 401 字'),
+  { d400: d400.text.slice(0, 60), d401: d401.text.slice(0, 60) })
 const atIndex = (k) => {   // 让【纪律】的**段首**恰好落在下标 k
   const head = '【面】a【不碰】无'
   return head + 'C'.repeat(k - head.length) + '【纪律】无【收录】watch=quiet。'
