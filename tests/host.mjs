@@ -1386,14 +1386,19 @@ await tool('room_intent').execute({ room: bRoomId, direction: longDir, watch: 'q
 const longDecl = await tool('room_declare_change').execute(
   { room: bRoomId, files: ['ulysses/app.py'], summary: '长方向回显测试' }, exec(A))
 const declBody = (await storedOf(bRoomId)).find((m) => m.seq === longDecl.seq).body
-// 边界两侧都钉：**前 200 字在、第 201 字不在**。（数 Y 的个数是错的 —— 前 200 字里还含【面】那几行，
-// 所以 Y 只剩 177；我第一版就是按"Y 恰好 200"写的，把正确的实现判红了。）
-check('★ 声明正文里的方向回显**恰好**截在 200 字（前 200 字在、第 201 字不在）',
-  declBody.includes(longDir.slice(0, 200)) && !declBody.includes(longDir.slice(0, 201))
-  && declBody.includes('全文 room_status'),
-  { bodyLen: declBody.length, dirLen: longDir.length, has200: declBody.includes(longDir.slice(0, 200)) })
-check('  且前 200 字确实留下了——不是把方向整段丢掉',
-  declBody.includes('长方向回显测试'), declBody.slice(0, 200))
+check('★ 声明正文里**不再回显方向散文**（要看它用 room_status / 面板成员行 —— 两处都是现算的）',
+  !declBody.includes('（我的方向：') && !declBody.includes(longDir.slice(0, 40))
+  && declBody.includes('长方向回显测试'),
+  { bodyLen: declBody.length, dirLen: longDir.length, hasEcho: declBody.includes('（我的方向：') })
+// 反向对照：**没声明方向**这个事实必须留着（它不是方向本身，是"声明那一刻作者有没有边界"的史实，不随方向漂移）。
+const noDirRoom = await rpc('create-room', { name: '无方向' })
+const noDirRoomId = noDirRoom.value.room.room.id
+await rpc('join', { roomId: noDirRoomId, sessionId: A.id, roleName: '实现者' })
+const noDirDecl = await tool('room_declare_change').execute(
+  { room: noDirRoomId, files: ['ulysses/app.py'], summary: '没声明方向时的声明' }, exec(A))
+const noDirBody = (await storedOf(noDirRoomId)).find((m) => m.seq === noDirDecl.seq).body
+check('  ★ 对照：没声明方向的作者仍被标出（「⚠ 我还没声明方向」—— 删方向散文时别把它一起删了）',
+  noDirBody.includes('⚠ 我还没声明方向') && !noDirBody.includes('（我的方向：'), noDirBody.slice(0, 200))
 
 // 只截头会把**结论**吃掉：声明正文的判定（"git 校验 ✓ 已证实：…"）在末尾。
 const tailMarker = '【结论在尾部-必须活下来】'
