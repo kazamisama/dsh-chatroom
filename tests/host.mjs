@@ -1412,6 +1412,45 @@ check('  ★ 而那信息**没有丢**：仍在收件人自己的系统提示词
   && boundarySection.text().includes('你负责：'),
   boundarySection === undefined ? '(没有注册边界段)' : boundarySection.text().slice(0, 160))
 
+// ★ 声明帧 = **摘要帧**（用户 2026-09-25："这个在投递链能改进吗？不然的话投递 token 数太大了"）。
+// 实测口径：本房间最近 6 小时 65 条声明 → 206 帧 / 26 万字符（平均正文 1035 字）。
+// 用的房间是"档位"那间：E 是 watch=all ⇒ 每条声明都必然被叫醒（义务帧），正好测摘要。
+const digestDecl = await tool('room_declare_change').execute({
+  room: tierRoomId,
+  files: ['ulysses/app.py'],
+  summary: '摘要帧测试：把 parse_cfg 改成读环境变量' + 'W'.repeat(600),
+  notify: 'contract',
+}, exec(A))
+const digestFrame = callsOf(E).slice(-1)[0].message.content[0].text
+const storedDecl = (await storedOf(tierRoomId)).find((m) => m.seq === digestDecl.seq).body
+// 判定词**不硬编码**（这条声明的仓库 D:\proj 不存在 ⇒ 它是"未证实"）：跟存储正文里那一句比对。
+// 两种写法都要认：帧里是「git ? 未证实」，存储正文里是「git 校验 ? 未证实」（中间那两字是 gitcheck 的标题）。
+const verdictWord = (s) => s.includes('✓ 已证实') ? 'verified'
+  : (s.includes('✗ 与事实不符') ? 'contradicted'
+    : (s.includes('? 未证实') ? 'unverified' : '(无)'))
+check('★ 声明帧是**摘要帧**：带 #seq / 文件清单 / 判定一词（与存储正文里的判定一致）/ 出口，且长度有上界',
+  digestFrame.includes('#' + digestDecl.seq) && digestFrame.includes('ulysses/app.py')
+  && verdictWord(digestFrame) !== '(无)' && verdictWord(digestFrame) === verdictWord(storedDecl)
+  && digestFrame.includes('room_message(seq=' + digestDecl.seq + ')')
+  && digestFrame.length < 500,
+  { frameLen: digestFrame.length, bodyLen: storedDecl.length, word: verdictWord(digestFrame), bodyWord: verdictWord(storedDecl) })
+// 摘要帧的**真正不变量**：帧长不随正文增长。（第一版我写的是"帧长 < 正文一半" ——
+// 那条在正文只有 712 字时是错的，而且它测的是"比例"，不是这个机制的性质。）
+await tool('room_declare_change').execute({
+  room: tierRoomId, files: ['ulysses/app.py'],
+  summary: '摘要帧不变量：' + 'W'.repeat(3600), notify: 'contract',
+}, exec(A))
+const bigDigestFrame = callsOf(E).slice(-1)[0].message.content[0].text
+const bigStoredDecl = (await storedOf(tierRoomId)).slice(-1)[0].body
+check('★ 正文 712 → ' + bigStoredDecl.length + ' 字，帧长几乎不变（差 ≤ 6 字：头的截断点相同，只差"全文 N 字"里的位数）',
+  Math.abs(bigDigestFrame.length - digestFrame.length) <= 6,
+  { smallBody: storedDecl.length, smallFrame: digestFrame.length, bigBody: bigStoredDecl.length, bigFrame: bigDigestFrame.length })
+check('  ★ 证据明细**不进帧**（"（commit 覆盖）"这种留在存储里，要读用 room_message 拉）',
+  !digestFrame.includes('commit 覆盖') && storedDecl.includes('W'.repeat(500)),
+  { frameTail: digestFrame.slice(-140) })
+check('  ★ 但**行动指令照旧在**（摘要帧不能把"你必须回一句"也省掉）',
+  digestFrame.includes('你必须回一句'), digestFrame.slice(-160))
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
