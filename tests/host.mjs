@@ -1174,6 +1174,32 @@ const realShape = '【面】' + 'A'.repeat(350) + '\n【不碰】无。\n【纪�
   + ' 更正我上一条：2026-09-25 我改了 #5052 与 docs/x.md:12。'
 const realIntent = await tool('room_intent').execute({ room: bRoomId, direction: realShape, watch: 'quiet' }, exec(E))
 console.log('   [复刻输入的提示原文] ' + realIntent.text)
+// ★ 边界值（cdfc696d #5130）：**只钉"离得远时是对的"等于没量门槛。**
+// 门槛一共两个，都必须由**构造**钉住，不能靠外推：
+//   · 长度：≤400 ⇒ 恰 400 不报、401 报；
+//   · 段首：必须落在**第 200 字或之前**（实现是 indexOf(tag) >= 200 即算缺）⇒ 恰 199 不报、200 报。
+// 为什么这两对只能由测试钉：回显只印总字数，作者自查不出自己在哪一侧（f008c4f2 #5114③）。
+const padTo = (n) => {
+  const head = '【面】x\n【不碰】无。\n【纪律】无。\n【收录】watch=quiet。'
+  return head + 'A'.repeat(n - head.length)
+}
+const d400 = await tool('room_intent').execute({ room: bRoomId, direction: padTo(400), watch: 'quiet' }, exec(E))
+const d401 = await tool('room_intent').execute({ room: bRoomId, direction: padTo(401), watch: 'quiet' }, exec(E))
+check('★ 长度边界：恰 400 字**不**报超长（判据不越界报错）', !d400.text.includes('标准 ≤400'), d400.text)
+check('★ 长度边界：401 字**报**超长（门槛真的在 400/401 之间）', d401.text.includes('标准 ≤400'), d401.text)
+const atIndex = (k) => {   // 让【纪律】的**段首**恰好落在下标 k
+  const head = '【面】a【不碰】无'
+  return head + 'C'.repeat(k - head.length) + '【纪律】无【收录】watch=quiet。'
+}
+const okIdx = await tool('room_intent').execute({ room: bRoomId, direction: atIndex(199), watch: 'quiet' }, exec(E))
+const badIdx = await tool('room_intent').execute({ room: bRoomId, direction: atIndex(200), watch: 'quiet' }, exec(E))
+check('★ 段首边界：第 199 字【纪律】**不**报（前 200 字之内）', !okIdx.text.includes('前 200 字里缺'), okIdx.text)
+check('★ 段首边界：第 200 字【纪律】算缺 —— 且**只点名它一个**（不连坐前面两段）',
+  badIdx.text.includes('前 200 字里缺') && badIdx.text.includes('【纪律】')
+  && !badIdx.text.includes('【不碰】（从第') && !badIdx.text.includes('【面】（从第'), badIdx.text)
+check('  提示里印了段首位置（作者可自查，而不是只知道"缺"）',
+  badIdx.text.includes('从第 201 字才开始'), badIdx.text)
+
 check('P6 四条判据同时踩 ⇒ 四条提示都要出现（少一条就是漏）',
   realIntent.text.includes('前 200 字里缺') && realIntent.text.includes('【不碰】')
   && realIntent.text.includes('标准 ≤400') && realIntent.text.includes('会腐烂的引用')
