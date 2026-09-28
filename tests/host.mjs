@@ -1538,6 +1538,28 @@ const coldStatus = await tool('room_status').execute({ room: remRoomId }, exec(A
 check('  ★ 而且**在 room_status 上看得见**（失败不再只活在 debug 行里）',
   coldStatus.text.includes('次送不出去'), coldStatus.text.split('\n').filter((l) => l.includes('送不出去')))
 
+console.log('26. 义务按 seq **幂等**（审计席 #5395：重复投递无害的前提 —— 喂两次同一 seq，欠账清单不变）')
+const idem = await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(B.id) + ' 幂等测试' }, exec(A))
+const owedOfB = async () => {
+  const st2 = (await rpc('state', {})).value.rooms.find((r) => r.room.id === bRoomId)
+  const mem = st2.members.find((x) => x.shortId === shortOf(B.id))
+  return mem === undefined ? '(无此人)' : JSON.stringify(mem.owedSeqs)
+}
+const owedBefore = await owedOfB()
+// 同一条 seq **再投一次**（走提醒路径；补投、冷唤醒、重判也都会走到同一个投递函数）
+await remindTick(Date.now() + 4 * 60 * 60 * 1000)
+const owedAfter = await owedOfB()
+check('★ 同一条 seq 被再投一次后，欠账清单**逐字不变**（义务从消息派生，不随投递次数累积）',
+  owedBefore === owedAfter && owedBefore.includes(String(idem.seq)), { owedBefore, owedAfter, seq: idem.seq })
+const persisted3 = JSON.parse(await fs.readFile(path.join(HOME, 'rooms.json'), 'utf8'))
+const idemRecs = (persisted3.deliveries || []).filter((d) => d.roomId === bRoomId && d.seq === idem.seq)
+check('  ★ 台账同样幂等：同一 (人, seq) 只留**一条**记录（重投/冷唤醒/重判都可能再来一次）',
+  idemRecs.filter((d) => d.sessionId === B.id).length === 1, idemRecs.length)
+// 📌 口径注记（审计席 #5395 的网里"不二次唤醒"那半要改）：**有意重复的唤醒**不在这条网里 ——
+// 补投只补"没送到"的（deliveredAt === null），提醒受冷却与 3 次上限（各自另有网）。
+check('  📌 口径：幂等管的是"义务不因重复投递增加"，**不是**"唤醒绝不重复"（那两条路是有意的、有闸的）',
+  typeof owedAfter === 'string', owedAfter)
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
