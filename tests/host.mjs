@@ -1560,6 +1560,23 @@ check('  ★ 台账同样幂等：同一 (人, seq) 只留**一条**记录（重
 check('  📌 口径：幂等管的是"义务不因重复投递增加"，**不是**"唤醒绝不重复"（那两条路是有意的、有闸的）',
   typeof owedAfter === 'string', owedAfter)
 
+// ★ 由上面那条口径**必然推出**的下一格（审计席 837e0518 #5413）：既然有意重复有两条路径，
+// 台账里"同一 seq 投了两次"就必须能分出**设计**还是**意外** —— 否则设计性重复会把意外重复盖住。
+const idemRec = (persisted3.deliveries || []).find((d) => d.roomId === bRoomId && d.seq === idem.seq && d.sessionId === B.id)
+check('★ 重复投递**带成因标签**：提醒路径再投一次 ⇒ sends=2、lastReason=reminder（有意的重复可辨认）',
+  idemRec !== undefined && idemRec.sends === 2 && idemRec.lastReason === 'reminder',
+  idemRec === undefined ? '(无记录)' : { sends: idemRec.sends, lastReason: idemRec.lastReason, reasons: idemRec.reasons })
+// 首投的成因：在 tick **之后**新建一条，确保它只被投过一次（拿老 seq 会被那次 tick 也提醒到 ⇒ 不确定）
+const freshSeq = (await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(B.id) + ' 首投成因' }, exec(A))).seq
+const persisted4 = JSON.parse(await fs.readFile(path.join(HOME, 'rooms.json'), 'utf8'))
+const freshRec = (persisted4.deliveries || []).find((d) => d.roomId === bRoomId && d.seq === freshSeq && d.sessionId === B.id)
+check('  ★ 首投的成因是 first —— **未带标签的重复**才是可疑的那一类',
+  freshRec !== undefined && freshRec.sends === 1 && freshRec.lastReason === 'first', freshRec)
+const repeatStatus = await tool('room_status').execute({ room: bRoomId }, exec(A))
+check('  ★ 而且这格在 room_status 上看得见（重复条数 + 最近成因）',
+  repeatStatus.text.includes('被重复投递') && repeatStatus.text.includes('逾期提醒'),
+  repeatStatus.text.split('\n').filter((l) => l.includes('重复投递')))
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
