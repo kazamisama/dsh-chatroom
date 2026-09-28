@@ -14,7 +14,8 @@ A 改了 app.py，B 不知道，跑到一半才发现接口变了。
 1. 成员改完文件后**声明**变更
 2. 宿主用 **git 事实校验**这份声明（说得跟 diff 不符 → 标红）
 3. **确定性匹配**算出可能相关的成员（零 token）
-4. 对这批成员投递一条必须回的消息，每人回一句结构化判断
+4. 对这批成员投递一条**按档位**的消息：默认（`routine`）只作通知、**谁都不必回**；
+   只有 `contract`（接口 / 字段 / 枚举变了）与 `irreversible`（删数据 / 改 schema / 进历史）才要求相关成员**各回一句**
 5. 其余成员在增量历史里看得到，但不被打扰
 
 ## 安装
@@ -32,16 +33,21 @@ dsh plugin --profile web add 'link:D:\dsh_dev\dsh-chatroom'
 dsh --profile web --dump-config | Select-String chatroom
 ```
 
-改完客户端或宿主代码**需要重启服务**；客户端 bundle 带内容哈希，页面也要刷新。
+改完**宿主侧**（`lib/index.js` / `lib/rooms.js` / `lib/gitcheck.js`）**必须重启服务**；
+**客户端侧**（`lib/client.js`）在 dev bundle 被重建时（例如跑着 `pnpm run dev:web`）会**热更新**，
+否则同样要重启 + 刷新页面（bundle 带内容哈希）。
+〔2026-09-25 补：这句原来只写"需要重启服务"—— 我因为它在客户端侧误判过一次"改了没生效"。〕
 
 ## 状态
 
 M0–M4 全部完成，并经过真机逐项验证。见 BLUEPRINT.md §11 里程碑与 §11.1–§11.5。
 
-测试：`node tests/<name>.mjs`，六套共 271 条断言 —— smoke（状态机 / 短号）/ host（宿主集成）/
-gitcheck（git 核验）/ markdown（渲染器与注入防护）/
+测试：`npm test`（或 `node tests/all.mjs`）跑全部，也可 `node tests/<name>.mjs` 单跑 —— **七套共 1071 条断言**：
+smoke（状态机 / 短号）/ host（宿主集成）/ gitcheck（git 核验）/ markdown（渲染器与注入防护）/
 panel（面板纯函数、渲染与重建闸门、候选筛选与排序）/
-transport（面板通道的传输层与各分支状态码，见 BLUEPRINT §11.7–§11.11）。
+transport（面板通道的传输层与各分支状态码，见 BLUEPRINT §11.7–§11.11）/
+invariants（写入口的不变量断言）。
+〔2026-09-25 更正：这里原来写"六套共 271 条"—— 漏了 invariants，条数也早已不是 271。〕
 
 ## 结构
 
