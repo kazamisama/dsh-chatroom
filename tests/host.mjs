@@ -1573,9 +1573,20 @@ const freshRec = (persisted4.deliveries || []).find((d) => d.roomId === bRoomId 
 check('  ★ 首投的成因是 first —— **未带标签的重复**才是可疑的那一类',
   freshRec !== undefined && freshRec.sends === 1 && freshRec.lastReason === 'first', freshRec)
 const repeatStatus = await tool('room_status').execute({ room: bRoomId }, exec(A))
-check('  ★ 而且这格在 room_status 上看得见（重复条数 + 最近成因）',
-  repeatStatus.text.includes('被重复投递') && repeatStatus.text.includes('逾期提醒'),
-  repeatStatus.text.split('\n').filter((l) => l.includes('重复投递')))
+check('  ★ 而且在 room_status 上**按类**看得见（设计内重复：提醒 N）',
+  repeatStatus.text.includes('设计内重复') && /提醒 \d+/.test(repeatStatus.text),
+  repeatStatus.text.split('\n').filter((l) => l.includes('重复')))
+check('  ★ 而"无标签重复"那一类**不出现**（没有可疑的重复，就不该有那行告警 —— 告警只挂在不该出现的那一类上）',
+  !repeatStatus.text.includes('无标签重复'),
+  repeatStatus.text.split('\n').filter((l) => l.includes('重复')))
+// 审计席 #5419：分类必须是**结构化的**（deliberate / suspicious / byReason），而不是一个总数 ——
+// 否则"可疑的那一类"在显示层又被总数盖住了。
+const bMemberRepeat = (await rpc('state', {})).value.rooms
+  .find((r) => r.room.id === bRoomId).members.find((x) => x.shortId === shortOf(B.id)).repeats
+check('  ★ 结构化分类在（deliberate / suspicious / byReason），不是一个笼统的 count',
+  bMemberRepeat !== undefined && bMemberRepeat.deliberate >= 1 && bMemberRepeat.suspicious === 0
+  && bMemberRepeat.byReason.reminder >= 1,
+  bMemberRepeat)
 
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')

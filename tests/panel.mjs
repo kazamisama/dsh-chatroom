@@ -54,6 +54,8 @@ const NAMES = [
   'recentStats',
   // 任务板 + 投递台账（宿主新加的两张表：字段缺失 / 不是数组 / 元素缺字段都要容错）
   'taskStatusLabel', 'taskRowsOf', 'taskLineOf', 'pendingDeliveryLabel',
+  // 重复投递的两类**分开显示**（审计席 #5419：可疑的那一类不能被总数盖住）
+  'repeatLabel',
   // 「这个面板自己花了多少」的一行读数（宿主载荷的 ms.build + 本机停摆探针的**同一窗口**计数）
   'fmtMs', 'numOrNull', 'usageLineOf',
 ]
@@ -639,6 +641,25 @@ check('  任务板是只读的（块内没有 rpc 调用、也没有事件处理
 check('  成员行挂上待确认标记（0 时拼出来还是原来那一行）',
   buildSrc !== null && buildSrc.includes('pendingDeliveryLabel(m.pending)')
   && buildSrc.includes("pendingBit === '' ? '' : ' · ' + pendingBit"))
+
+console.log('24b. repeatLabel —— 重复投递**按类分**，可疑的那一类单独一行告警（审计席 #5419）')
+const onlyDeliberate = api.repeatLabel({ deliberate: 2, suspicious: 0, byReason: { retry: 1, reminder: 1 } })
+check('设计内重复 ⇒ 分类计数（补投 1 / 提醒 1），**没有**告警行',
+  onlyDeliberate.text === '↻ 设计内重复 补投 1 / 提醒 1' && onlyDeliberate.warn === '', onlyDeliberate)
+const hasSuspicious = api.repeatLabel({ deliberate: 5, suspicious: 1, byReason: { retry: 4, reminder: 1 } })
+check('★ 无标签重复 ⇒ 单独一行 ⚠ 告警（**它的出现本身**要被看见，不能藏在总数里）',
+  hasSuspicious.warn !== '' && hasSuspicious.warn.includes('⚠') && hasSuspicious.warn.includes('1 条无标签重复'),
+  hasSuspicious)
+check('  ★ 而分类计数**不受影响**（两类各报各的，不是合成一个数）',
+  hasSuspicious.text === '↻ 设计内重复 补投 4 / 提醒 1', hasSuspicious.text)
+const suspOnly = api.repeatLabel({ deliberate: 0, suspicious: 2, byReason: {} })
+check('只有可疑的 ⇒ 只有告警行（text 为空）', suspOnly.text === '' && suspOnly.warn.includes('2 条无标签重复'), suspOnly)
+const emptyRepeat = api.repeatLabel(undefined)
+check('没有重复 ⇒ 两行都空（与 pendingDeliveryLabel 同一纪律：0 不占位）',
+  emptyRepeat.text === '' && emptyRepeat.warn === '', emptyRepeat)
+check('  结构钉：成员行用 repeatLabel，且告警**另起一个 warn 样式的 div**',
+  buildSrc !== null && buildSrc.includes('var repeat = repeatLabel(m.repeats)')
+  && buildSrc.includes("if (repeat.warn !== '') left.appendChild(el('div', S.warn, repeat.warn))"))
 
 // 新表的变化不一定伴随消息：不进指纹，面板就会一直显示旧状态（数字说谎比没有数字更糟）
 const sigTasks = JSON.parse(JSON.stringify(base))
