@@ -1,5 +1,5 @@
 /**
- * 一次跑完六套。**先打印这棵树的状态**。
+ * 一次跑完**全部**套件（名单见下面的 SUITES —— 那是唯一源，不在这里写套数）。**先打印这棵树的状态**。
  *
  * 为什么要有这一行（真机 2026-09-16）：审计（f008c4f2）在我往 panel.mjs 写 #1640 的过程中
  * 跑了这个仓库，看到 panel.mjs = 187 passed / 1 failed，差点报"并行聚合下偶发失败"；
@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 const run = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repo = path.join(here, '..')
-const SUITES = ['smoke', 'host', 'panel', 'gitcheck', 'markdown', 'transport', 'invariants']
+const SUITES = ['smoke', 'host', 'panel', 'gitcheck', 'markdown', 'transport', 'invariants', 'docs']
 
 async function git(args) {
   try {
