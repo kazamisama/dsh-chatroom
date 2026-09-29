@@ -570,6 +570,8 @@ Markdown 渲染器**不引用面板的 JS 常量**（`T`），直接用 CSS 变�
 
 - profile 声明的 **9 个依赖全部在位且可解析**；
 - `dsh --profile web --dump-config` → **11 个 bundle 全部进组装树**，含 `- id: dsh-minigames` 与 `- id: dsh-chatroom`；
+  〔2026-09-29 注〕这是**当时（CLI 时代）**的核对记录；DSH 0.2.0-rc.2 起是桌面端、没有 `dsh web`，
+  这条命令不再适用 —— 现在的形态与装载核对见 **§11.58**；
 - 运行中的服务（pid **259188**，**2026-09-10 15:31:12** 启动）下发给浏览器的 boot 清单里同时有
   `/plugins/dsh-chatroom/client.js?rev=e2e07deee24c` 与 `/plugins/@dsh-external/dsh-minigames/client.js?rev=f892d72ace1c`
   —— **两个插件的客户端半侧都真的在被服务**；
@@ -2618,6 +2620,46 @@ execute 包一层：点名了房间且调用者不是该房间的（enabled）�
 冷却期内不重复 / 冷却过后第 2、第 3 次 / 到上限不再追 / `room_status` 上能看到"已自动提醒 3 次"）。
 测试**不该等 20 秒**：`ctx.effect` 暴露了 `tick` 钩子、`at` 由测试传进去 ——
 逾期是一个**时间陈述**，而时间陈述不该靠等真实时间来证明。
+
+## 11.58 DSH 从 CLI 迁到**桌面端**：0.2.0-rc.2 的适配核对（2026-09-29 · 已改登记；**待重启实测**）
+
+**形态变化**（用户："dsh 已更新，已从 cli 移到桌面端"）：
+· DSH 现在是 **Electron 桌面应用**（`C:\application\dsh\DeepSeek Harness.exe`；
+  userData 在 `%APPDATA%\@deepseek-ai\dsh-desktop`）；
+· **不再有 `dsh web`、也没有 3080 端口**（实测无监听）⇒ §11.33／§11.34 里那些"3080 延迟"是**当时的测量记录**，
+  不是现在的形态；
+· 本体版本 **0.2.0-rc.2**（`@deepseek-ai/dsh-base`）、cordis **4.0.4**、`hostProtocolVersion: 4`；
+· 桌面端使用**新建的 `desktop` profile**（`~/.dsh/profiles/desktop`，创建时间＝App 首次启动那一刻），
+  它里面**原本没有本插件** ⇒ 会话里**一个 `room_*` 工具都没有**（这是"插件没被组装"的直接证据，不是猜测）。
+
+**兼容性核对**（对 `app.asar` 做字符串扫描，逐项）：
+
+| 插件用到的 | 0.2.0-rc.2 |
+| --- | --- |
+| `ctx.tools.register` / `defineTool` | ✅ 在（文档还写明 `ctx.tools.register` 是 guarded 的） |
+| `ctx.systemPrompt.section()` · `agent.ctx.inject(['systemPrompt'], …)` | ✅ 在 |
+| `ctx.agents.get/list/resume` · `followup/inject/steer` | ✅ 在 |
+| `ctx.sessionQuery.readTitleSnapshots` / `listSessions` | ✅ 在 |
+| `ctx.sessionPersistence` / `agentPresets` / `agentDefaultModel` | ✅ 在 |
+| `ctx.connection` · `connection.rpc.call` · `connection.requestRejection` | ✅ 在 |
+| `webServer`（§11.7 起面板通道挂 prefix 路由的地方） | ✅ 在（官方用法：`ctx.inject(['connection','webServer'], …)`） |
+| `dsh.client.platform: 'web'` | ✅ 仍合法（校验器只要求它是字符串） |
+| **`connection.rpc.handle`**（宿主侧挂通道的**老**写法） | ❌ **一处都没有** —— 新版这一层是 **Typert RPC 网关**：host `ctx.typertGateway`、client `ctx.remote` |
+
+**改了什么**：`~/.dsh/profiles/desktop/package.json` 里加 `"dsh-chatroom": "link:D:/dsh_dev/dsh-chatroom"`，
+并把 `dsh-chatroom` 追加进 `dsh.profile.bundles`（与旧 `web` profile 同形；同一 profile 里已有
+`dsh-whale-widget` 这个先例）。备份：同目录 `package.json.20260929.bak`。
+
+**待重启实测**（三件，缺一不可）：
+1. 会话里出现 `room_*` 工具（＝宿主半侧被组装）；
+2. 房间面板能拉到 `state`（＝面板通道在新版的 `webServer` 与信封语义下仍然通）——
+   **这是唯一有真实风险的一处**：插件是"自己复刻 Connection `/api` 语义"挂上去的，
+   而新版多了 Typert 网关与 `hostProtocolVersion: 4`；
+3. `~/.dsh/dsh-chatroom/rooms.json` 继续被写（＝继承既有房间历史；该文件 2026-09-29 14:44 还被写过，
+   说明迁移**之前**它是活的）。
+
+**可选（不急）**：把自挂的 prefix 路由迁到官方 Typert 网关（`ctx.typertGateway` + client `ctx.remote`）。
+它是"更合规"，不是"能跑"的前提 —— 等第 2 条实测确认旧形态失效再做。
 
 ## 12. 风险与未决
 

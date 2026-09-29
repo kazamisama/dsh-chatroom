@@ -20,22 +20,24 @@ A 改了 app.py，B 不知道，跑到一半才发现接口变了。
 
 ## 安装
 
-```powershell
-dsh plugin --profile web add 'link:D:\dsh_dev\dsh-chatroom'
-```
+DSH 从 **0.2.0-rc.2** 起是**桌面端应用**（Electron；不再有 `dsh web`、也没有 3080 端口），
+插件装在**当前 profile** 里。桌面端默认使用 `desktop` profile（`~/.dsh/profiles/desktop/`）——
+和 CLI 时代一样，做两件事：`dependencies` 里加一条 `link:`，并把插件名追加进
+`dsh.profile.bundles`（**后者才真正决定插件进不进组装树**）：
 
-它会做两件事：在 profile 的 `dependencies` 里加一条 `link:`，并把 `dsh-chatroom` 追加进
-`dsh.profile.bundles` —— **后者才真正决定插件进不进组装树**。
+    "dependencies": { "dsh-chatroom": "link:D:/dsh_dev/dsh-chatroom" }
+    "dsh": { "profile": { "bundles": [ "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dsh-chatroom" ] } }
 
-装载验证（不必启服务）：
+改完 **重启桌面端**（应用会自己 pnpm 装依赖）。桌面端里也带**插件管理器** UI —— 走它更稳。
+〔2026-09-29 更正〕这里原来写的是 `dsh plugin --profile web add 'link:…'` 与
+`dsh --profile web --dump-config`：那是 CLI 时代的形态，**在桌面端下这两条都不再适用**。
 
-```powershell
-dsh --profile web --dump-config | Select-String chatroom
-```
+装载验证（不必重启）：`~/.dsh/profiles/desktop/node_modules/dsh-chatroom` 存在，且
+`bundles` 里有 `dsh-chatroom`；**重启后**：会话里能看到 `room_*` 工具、房间面板能拉到 `state`。
 
-改完**宿主侧**（`lib/index.js` / `lib/rooms.js` / `lib/gitcheck.js`）**必须重启服务**；
-**客户端侧**（`lib/client.js`）只有在 **dev bundle 正在被重建**时才会**热更新**。
-**判别**：看 dev bundle 是否在重建 —— 在重建＝会热更新；**判不了就按"必须重启"处理**
+改完**宿主侧**（`lib/index.js` / `lib/rooms.js` / `lib/gitcheck.js`）**必须重启应用**；
+**客户端侧**（`lib/client.js`）只有在**桌面端正在重建 client bundle**时才会**热更新**。
+**判别**：看 bundle 是否在重建 —— 在重建＝会热更新；**判不了就按"必须重启"处理**
 （多花一次重启，比误判"改了没生效"便宜）。
 〔2026-09-25 更正：这句原来只写"需要重启服务"—— 只给结论、不给判别，我因此误判过一次。〕
 
