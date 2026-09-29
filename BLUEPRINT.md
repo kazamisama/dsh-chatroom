@@ -2650,6 +2650,21 @@ execute 包一层：点名了房间且调用者不是该房间的（enabled）�
 并把 `dsh-chatroom` 追加进 `dsh.profile.bundles`（与旧 `web` profile 同形；同一 profile 里已有
 `dsh-whale-widget` 这个先例）。备份：同目录 `package.json.20260929.bak`。
 
+**⚠ 登记 ≠ 安装（实测踩到，写下来）**：只写 `package.json` **不会**让桌面端去装依赖 ——
+它的 `.plugin-manager/operation-*` 里记的是**上一次**（给 `dsh-whale-widget`）那回安装，
+于是 `node_modules` 里没有 `dsh-chatroom` ⇒ 组装器解析不到它 ⇒ 插件管理器里显示**「异常」**
+（App 会**保留**我们写的 manifest 条目，只是不主动安装）。
+修法：用 **App 自带的工具链**在那个 profile 里跑一次安装（比系统 pnpm 更贴近 App 的口味）：
+
+    # 在 ~/.dsh/profiles/desktop 目录里跑；<runtime> = ~/.dsh/dsh-runtimes/dsh-primary-runtime
+    <runtime>/dependencies/node/bin/node.exe <runtime>/dependencies/pnpm/bin/pnpm.cjs install
+
+成功后：`node_modules/dsh-chatroom` 是指向 `D:\dsh_dev\dsh-chatroom` 的 **link**，
+`pnpm-lock.yaml` 的 importer 里也出现该条目。之后仍需**重启 / 在管理器里重试**让 App 重新组装。
+
+**「Already up to date」不等于「没装」**：pnpm 那句是在说 lockfile 已是最新。判据要看
+`node_modules/<name>` 是不是 link、lockfile 里有没有该条目 —— 不要靠那句话下结论。
+
 **待重启实测**（三件，缺一不可）：
 1. 会话里出现 `room_*` 工具（＝宿主半侧被组装）；
 2. 房间面板能拉到 `state`（＝面板通道在新版的 `webServer` 与信封语义下仍然通）——
