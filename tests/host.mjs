@@ -1338,6 +1338,13 @@ check('逾期后追一次：followup，且说清**欠的是哪一条**',
   { mine: mine(first), modes: callsOf(B).slice(rB).map((c) => c.mode) })
 // E 是别的房间的成员，那边逾期也会追它 ⇒ 不能拿"E 有没有被叫醒"当判据（那是全库的量）。
 // 只能问：**与本房间有关**的提醒里有没有它。
+// ★ 6588d7f6 #5723 报的：提醒帧显示"你还欠 #X"而同一时刻 room_status 没有欠账 ——
+// 核过是"帧落地比生成晚"（他的回执比提醒晚 16 秒～2 分钟），缺的是**这一帧的年龄**。
+const s21Frame = callsOf(B).slice(rB).find((c) => c.mode === 'followup' && c.message.content[0].text.includes('逾期提醒'))
+check('  ★ 提醒帧**带生成时刻**，并指明以 room_status 为准（让收件人能自己判定它是不是旧账）',
+  s21Frame !== undefined && s21Frame.message.content[0].text.includes('本帧生成于')
+  && s21Frame.message.content[0].text.includes('以 room_status 的欠账清单为准'),
+  s21Frame === undefined ? '(没收到提醒帧)' : s21Frame.message.content[0].text.slice(-160))
 check('  ★ 声明 feed（看得见但别叫醒我）的席位**不追** —— 那是它自己的合约',
   !mine(first).some((s) => s.sessionId === E.id)
   && !callsOf(E).slice(rE).some((c) => c.message.source && c.message.source.roomId === remRoomId),
