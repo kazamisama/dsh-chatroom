@@ -1090,7 +1090,12 @@ const t15 = await tool('room_task').execute({
 check('room_task create 成功', t15.ok === true && t15.text.includes('加投递台账'), t15.text)
 check('  **事前**越界：建任务时就把 A 的地盘点出来（不必等改完再事后对质）',
   t15.text.includes('可能越界') && t15.text.includes('webui/pages/static/js/chat.js'), t15.text)
-check('  而且不制造提及/义务（任务板是分工，不是要谁表态）', !t15.text.includes('@'), t15.text)
+// 〔2026-10-04 用户裁定"要"〕这句原来是「不制造提及/义务（任务板是分工，不是要谁表态）」——
+// 用户裁定后改成：**命中别人领地就把 owner @ 上**（他从"不知情"变成"必须回一句"）。
+// 注意判据仍是一条：**正文里不写 @**（义务由 mentions 显式给出），所以这里查的是"没有 @ 字符"、
+// 而"已 @ 谁"是返回值里的说明文字（同一句里既有裸短号、又没有引信）。
+check('  ★ 命中别人领地 ⇒ 返回值说"已 @ 他"，但**正文里不写 @**（义务靠 mentions，不靠引信）',
+  t15.text.includes('已 @ ') && t15.text.includes('aaaabbbb') && !t15.text.includes('@aaaabbbb'), t15.text)
 const tid15 = (t15.text.match(/task-\d+/) || [])[0]
 check('  拿到任务 id', typeof tid15 === 'string' && tid15 !== '', tid15)
 const list15 = await tool('room_task').execute({ room: roomId, op: 'list' }, exec(A))
@@ -1642,6 +1647,28 @@ check('  ★ 它是**一行**（digest）、且**不是 followup**：不唤醒�
   && callsOf(A).slice(s27EchoFrom).every((c) => c.mode !== 'followup'),
   { modes: callsOf(A).slice(s27EchoFrom).map((c) => c.mode), len: s27EchoCalls.length === 0 ? 0 : s27EchoCalls[0].message.content[0].text.length })
 check('  ★ 发起人**没有**因此多欠任何东西（回声不是义务）', s27BeforeEcho === s27AfterEcho, { s27BeforeEcho, s27AfterEcho })
+
+console.log('28. 任务命中别人领地 ⇒ **@ 那位 owner**（用户 2026-10-04 裁定"要"；此前只警告发起人）')
+await tool('room_intent').execute({ room: bRoomId, direction: '§28 任务越界测试：负责 web 端点', paths: ['ulysses/web/**'], excludes: [] }, exec(B))
+const tB0 = callsOf(B).length
+const taskHit = await tool('room_task').execute({
+  room: bRoomId, op: 'create', title: '改 web 入口（会碰 B 的地盘）', expectPaths: ['ulysses/web/app.py'],
+}, exec(A))
+check('★ 建任务时命中别人领地 ⇒ 返回值明说"已 @ 他"（看得见的从"碰的人"扩到"被碰的人"）',
+  taskHit.text.includes('已 @ ') && taskHit.text.includes(shortOf(B.id)), taskHit.text.slice(-220))
+check('  ★ 而且**真的给 owner 登记了义务**（他从"不知情"变成"必须回一句"）',
+  callsOf(B).slice(tB0).some((c) => c.mode === 'followup'), callsOf(B).slice(tB0).map((c) => c.mode))
+const taskStatus = await tool('room_status').execute({ room: bRoomId }, exec(A))
+check('  ★ room_status 上也能看到这条（owner 那一行欠着它）',
+  taskStatus.text.includes(shortOf(B.id)) && /欠[^\n]*#/.test(taskStatus.text), taskStatus.text.split('\n').filter((l) => l.includes(shortOf(B.id)))[0] || '')
+// 对照：expectPaths 谁都打不到 ⇒ 不 @ 任何人（别把没冲突的任务也变成义务）
+const tB1 = callsOf(B).length
+const taskMiss = await tool('room_task').execute({
+  room: bRoomId, op: 'create', title: '改没人负责的文件', expectPaths: ['zzz/nobody-owns-this.py'],
+}, exec(A))
+check('  ★ 对照：打不到任何人的领地 ⇒ **不 @**（义务不该凭空长出来）',
+  !taskMiss.text.includes('已 @ ') && callsOf(B).length === tB1,
+  { tail: taskMiss.text.slice(-120), bGained: callsOf(B).length - tB1 })
 
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
