@@ -266,6 +266,24 @@ const eSeq = grab(() => assertStateShape(badSeq))
 check('重复 seq 在体检里被点出',
   eSeq !== null && eSeq.problems.some((p) => p.code === 'INVARIANT_SEQ_NOT_MONOTONIC'), eSeq === null ? null : eSeq.problems)
 
+// **投递留痕的负向网**（2026-10-04 用户裁定做这张表时一并加的）：它只该装"重复过 / 失败过"的，
+// 装进一条正常单投 ⇒ 判据被绕过了，体检要报出来（否则"只装值得记的"这句话没人守）。
+const badHist = makeState()
+badHist.deliveryHistory = [{
+  roomId: 'room-a', sessionId: BOB, seq: 1, sends: 1, attempts: 0, reasons: ['first'],
+  lastReason: 'first', firstAt: 1, lastAt: 2, ackedAt: 3,
+}]
+const eHist = grab(() => assertStateShape(badHist))
+check('留痕里装了**正常单投** ⇒ 体检点出来（这张表只装重复/失败的）',
+  eHist !== null && eHist.problems.some((p) => p.code === 'INVARIANT_SHAPE' && String(p.message).includes('正常单投')),
+  eHist === null ? null : eHist.problems)
+const okHist = makeState()
+okHist.deliveryHistory = [{
+  roomId: 'room-a', sessionId: BOB, seq: 1, sends: 2, attempts: 0, reasons: ['first', 'reminder'],
+  lastReason: 'reminder', firstAt: 1, lastAt: 2, ackedAt: 3,
+}]
+check('  而重复过的那条不被误伤（sends=2 ⇒ 正身）', assertStateShape(okHist) === true)
+
 const badCycle = makeState()
 badCycle.tasks = [task({ id: 't-a', deps: ['t-b'] }), task({ id: 't-b', deps: ['t-a'] })]
 const eCycle = grab(() => assertStateShape(badCycle))

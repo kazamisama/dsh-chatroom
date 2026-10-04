@@ -1670,6 +1670,40 @@ check('  ★ 对照：打不到任何人的领地 ⇒ **不 @**（义务不该�
   !taskMiss.text.includes('已 @ ') && callsOf(B).length === tB1,
   { tail: taskMiss.text.slice(-120), bGained: callsOf(B).length - tB1 })
 
+console.log('29. 投递留痕：销账后仍能回答"这条投了几次、首投何时"（6588d7f6 #5723 的 B 类）')
+// C 是冷会话：§21 里那条先投失败、又被提醒重投 ⇒ 它一动房间工具就销账 ⇒ 应该折成留痕
+// 只数 **C 自己的**那些（room_status 只销 C 的账；把别人还没销的算进来会得出"折少了"的假红）
+const s29Before = JSON.parse(await fs.readFile(path.join(HOME, 'rooms.json'), 'utf8')).deliveries
+  .filter((d) => d.roomId === remRoomId && d.sessionId === C.id && ((d.sends || 0) > 1 || (d.attempts || 0) > 0))
+await tool('room_status').execute({ room: remRoomId }, exec(C))  // 销账（C 动了房间工具）
+const s29Raw = JSON.parse(await fs.readFile(path.join(HOME, 'rooms.json'), 'utf8'))
+const s29Hist = s29Raw.deliveryHistory.filter((h) => h.roomId === remRoomId)
+check('★ 销账时把**重复过 / 失败过**的折成留痕（正常单投不留）',
+  s29Before.length > 0 && s29Hist.length >= s29Before.length,
+  { 销账前值得记的: s29Before.length, 折出来的: s29Hist.length })
+const s29Row = s29Hist[s29Hist.length - 1]
+check('  ★ 留痕带 首投/最近/销账 三个时刻与成因序列 —— 正是他报告里要、而我当时给不了的那两列',
+  s29Row !== undefined && Number.isFinite(s29Row.firstAt) && Number.isFinite(s29Row.lastAt)
+  && Number.isFinite(s29Row.ackedAt) && Array.isArray(s29Row.reasons), s29Row)
+const s29Read = await tool('room_message').execute({ room: remRoomId, seq: s29Row.seq }, exec(A))
+check('  ★ 读这条就能看到留痕（留了痕必须有人看得见，否则又是一张只有工具挖得到的表）',
+  s29Read.text.includes('投递留痕') && s29Read.text.includes('首投'),
+  s29Read.text.split('\n').filter((l) => l.includes('投递留痕')))
+// "计数不归零"要拿**真的重复过**的那条来测：冷会话 C 那条是**失败**（sends=1），本来就不该算重复。
+// 找一条已经销账、且留痕里 sends>1 的（B 在 §21 被提醒重投过那种），核它是否仍被数到。
+const s29Dup = s29Raw.deliveryHistory.find((h) => h.sends > 1)
+const s29Rep = s29Dup === undefined ? null : (await rpc('state', {})).value.rooms
+  .find((r) => r.room.id === s29Dup.roomId).members.find((x) => x.sessionId === s29Dup.sessionId).repeats
+const s29StillInLedger = s29Dup !== undefined && s29Raw.deliveries
+  .some((d) => d.roomId === s29Dup.roomId && d.sessionId === s29Dup.sessionId && d.seq === s29Dup.seq)
+check('  ★ 且**销账后重复计数不归零**（否则"被投过两次"恰好在你来查的时候消失）',
+  s29Dup !== undefined && s29Rep !== null && s29Rep.count >= 1 && s29StillInLedger === false,
+  { 留痕: s29Dup, 计数: s29Rep, 还在台账里: s29StillInLedger })
+// 对照：**正常单投**的消息销账后不留痕（表不随正常投递增长 —— 这是它敢一直开着的理由）
+const s29Normal = await tool('room_message').execute({ room: bRoomId, seq: s27EchoDecl.seq }, exec(A))
+check('  ★ 对照：正常单投的消息**没有**留痕行（表只装异常与重复）',
+  !s29Normal.text.includes('投递留痕'), s29Normal.text.split('\n').filter((l) => l.includes('投递')).slice(0, 3))
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')

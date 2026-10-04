@@ -2362,7 +2362,16 @@ queued messages when it resumes*。
 （room_status 看得见「欠」），但那个人**永远不会知道**有人叫过它。而且 `markRead` 只在 `judge()`/`join()` 推进，
 所以「已读 N」其实是"最后表过态的 seq"，`deltaFor` 写好了却只有测试在用。
 **改法**：
-· `state.deliveries: [{roomId, sessionId, seq, at, deliveredAt, attempts}]` —— **只在还没确认时留痕**，确认即删；
+· `state.deliveries: [{roomId, sessionId, seq, at, deliveredAt, attempts, sends, reasons, lastReason, lastAt}]`
+  —— **只在还没确认时留痕**，确认即删；
+  · `state.deliveryHistory`（**投递留痕**，用户 2026-10-04 裁定加）：销账时**只把值得记的折进来** ——
+  `sends > 1`（被重复投递过）或 `attempts > 0`（有过失败尝试）；正常单投照旧删掉、不留。
+  它回答的是上面那张表**答不了**的问题：'确认即删'意味着"同一 seq 投了几次、首投何时、最近何时"
+  在成员动过房间工具之后就**无人能回答**（6588d7f6 在 #5723 报的 B 类，我核他的报告时就是这么扑空的）。
+  读取入口在 **`room_message(seq)` 的回执段**（一行：共投几次 / 成因序列 / 首投·最近·销账三个时刻）
+  —— 留痕若没有读取入口，就只是"又一张只有工具挖得到的表"。
+  `repeatSends` 同时数**在册的与留痕的**：否则"被投过两次"恰好在你来查的时候消失。
+  体检（`invariants`）守它一句话：**留痕里出现正常单投 ⇒ 报 INVARIANT_SHAPE**（判据被绕过）；
 · 投递时 `recordDelivery`（幂等）→ 成功 `markDelivered` / 失败 `failDelivery`（attempts+1）；
 · **补投**：下一次给这个人投递时，先补一帧"上次没投出去"的最老的（≤ 每条 3 次）；
 · **确认（ack）**发生在它自己动房间工具时：`room_judge`（确认到该 seq）、`room_message`（拉到哪条确认到哪条）、
