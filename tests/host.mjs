@@ -1588,6 +1588,54 @@ check('  ★ 结构化分类在（deliberate / suspicious / byReason），不是
   && bMemberRepeat.byReason.reminder >= 1,
   bMemberRepeat)
 
+console.log('27. 两条缝的补丁：① 正文提到别人领地却没 @ ⇒ 只提示；② 回执轻轻回声给发起人')
+// ① 领地提示：bRoomId 里 B 负责 ulysses/web/**（前面某条测试替它声明的），A 正文里提到它但不 @ B
+const s27TurfFrom = callsOf(B).length
+// 自给自足：不依赖远处 block 留下的边界状态（第一版就踩了——那时的 B 已经没有 ulysses/web/** 了）
+await tool('room_intent').execute({ room: bRoomId, direction: '§27 领地提示测试：负责 web 端点', paths: ['ulysses/web/**'], excludes: [] }, exec(B))
+const s27TurfSay = await tool('room_say').execute({
+  room: bRoomId,
+  text: '背景：ulysses/web/app.py 那个入口我看了下，字段顺序有点怪（不需要回应）',
+}, exec(A))
+const s27Owners = await tool('room_owners').execute({ room: bRoomId, paths: ['ulysses/web/app.py'] }, exec(A))
+
+check('  （前提自检）ulysses/web/app.py 确实归 B —— 否则这条网测的是空气',
+  s27Owners.text.includes(shortOf(B.id)), s27Owners.text.replace(/\n/g, ' ').slice(0, 160))
+check('★ 正文提到别人负责的路径、又没 @ 他 ⇒ 返回值里**只提示**（不拒绝、不登记义务）',
+  s27TurfSay.text.includes('📌 正文提到了') && s27TurfSay.text.includes(shortOf(B.id)) && s27TurfSay.text.includes('ulysses/web'),
+  //   （提示报的是**命中的模式**（ulysses/web/**），不是正文里的文件名 —— 与声明那条 ⚠ 同一形状）
+  s27TurfSay.text.slice(-220))
+check('  ★ 而**没有**因此给 B 登记义务（正文里不写 @ ⇒ 没有引信）',
+  callsOf(B).length === s27TurfFrom && !s27TurfSay.text.includes('@' + shortOf(B.id)),
+  { bCallsGained: callsOf(B).length - s27TurfFrom, tail: s27TurfSay.text.slice(-120) })
+// 对照：真 @ 了他，就不再提示他（提示是给"忘了 @"的人看的）
+const s27AtSay = await tool('room_say').execute({
+  room: bRoomId,
+  text: '@' + shortOf(B.id) + ' ulysses/web/app.py 那个入口要你看一下',
+}, exec(A))
+check('  ★ 对照：真 @ 了他 ⇒ **不再**提示他',
+  !s27AtSay.text.includes('📌 正文提到了 ' + shortOf(B.id)), s27AtSay.text.slice(-200))
+
+// ② 回执回声：A 发的消息被 B 表态后，A 应收到一条**一行 inject**（不唤醒、不登记义务）
+const s27EchoDecl = await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(B.id) + ' 回声测试：请回一句' }, exec(A))
+const s27EchoFrom = callsOf(A).length
+const s27BeforeEcho = JSON.stringify((await rpc('state', {})).value.rooms
+  .find((r) => r.room.id === bRoomId).members.find((x) => x.shortId === shortOf(A.id)).owedSeqs)
+await tool('room_judge').execute({ room: bRoomId, seq: s27EchoDecl.seq, verdict: 'catch-up', note: '回声测试的备注' }, exec(B))
+const s27EchoCalls = callsOf(A).slice(s27EchoFrom).filter((c) => c.mode === 'inject')
+check('★ 对方表态后，发起人收到一条 **inject 回声**（能读出"谁、什么 verdict、note"）',
+  s27EchoCalls.length === 1
+  && s27EchoCalls[0].message.content[0].text.includes('收到 ' + shortOf(B.id) + ' 的表态：catch-up')
+  && s27EchoCalls[0].message.content[0].text.includes('回声测试的备注'),
+  s27EchoCalls.map((c) => c.message.content[0].text.slice(0, 160)))
+const s27AfterEcho = JSON.stringify((await rpc('state', {})).value.rooms
+  .find((r) => r.room.id === bRoomId).members.find((x) => x.shortId === shortOf(A.id)).owedSeqs)
+check('  ★ 它是**一行**（digest）、且**不是 followup**：不唤醒发起人、不登记义务',
+  s27EchoCalls.length === 1 && s27EchoCalls[0].message.content[0].text.length < 400
+  && callsOf(A).slice(s27EchoFrom).every((c) => c.mode !== 'followup'),
+  { modes: callsOf(A).slice(s27EchoFrom).map((c) => c.mode), len: s27EchoCalls.length === 0 ? 0 : s27EchoCalls[0].message.content[0].text.length })
+check('  ★ 发起人**没有**因此多欠任何东西（回声不是义务）', s27BeforeEcho === s27AfterEcho, { s27BeforeEcho, s27AfterEcho })
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
