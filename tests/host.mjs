@@ -1821,6 +1821,20 @@ check('★ DELIBERATE_REPEAT_REASONS 里每个成因都有显示名（否则面�
 check('  ★ 而 first 在显示名里有、却**不在**那个集合里（它＝"没有新成因"，正是可疑的那一类）',
   typeof REPEAT_REASON_LABEL.first === 'string' && !DELIBERATE_REPEAT_REASONS.includes('first'),
   { first: REPEAT_REASON_LABEL.first, deliberate: DELIBERATE_REPEAT_REASONS })
+// **服务端源码网**（审计席 #6206 顺查的另一半）：index.js 里同样不许按成因名硬编码渲染 ——
+// 那条路原来就是第一份副本（room_status 里 byReason.retry / byReason.reminder），2026-10-06 才改成派生。
+const idxSrcAll = await fs.readFile(new URL('../lib/index.js', import.meta.url), 'utf8')
+const idxCode = idxSrcAll.replace(/\/\*[\s\S]*?\*\//g, '')
+  .split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
+check('★ 源码网（服务端）：index.js 的**代码**里不按成因名分支 —— 清单只许从 DELIBERATE_REPEAT_REASONS 派生',
+  !/byReason\.(retry|reminder|echo)\b/.test(idxCode) && !/'补投 '\s*\+/.test(idxCode),
+  { has: /byReason\.(retry|reminder|echo)\b/.test(idxCode) })
+// 面板载荷确实把清单与文案送出去了（面板侧零副本的前提）
+const s33 = (await rpc('state', {})).value.rooms[0]
+check('★ 面板载荷带 repeatReasons / repeatLabels（面板不改也能显示新成因）',
+  Array.isArray(s33.repeatReasons) && s33.repeatReasons.includes('echo')
+  && s33.repeatLabels !== undefined && typeof s33.repeatLabels.echo === 'string',
+  { reasons: s33.repeatReasons, labels: s33.repeatLabels })
 
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')

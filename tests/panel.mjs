@@ -643,23 +643,40 @@ check('  成员行挂上待确认标记（0 时拼出来还是原来那一行）
   && buildSrc.includes("pendingBit === '' ? '' : ' · ' + pendingBit"))
 
 console.log('24b. repeatLabel —— 重复投递**按类分**，可疑的那一类单独一行告警（审计席 #5419）')
-const onlyDeliberate = api.repeatLabel({ deliberate: 2, suspicious: 0, byReason: { retry: 1, reminder: 1 } })
+// 〔2026-10-06〕清单与文案现在**由服务端给**（room.repeatReasons / room.repeatLabels）：
+// 面板这一层一份都不留，否则机制侧加了新成因、面板侧不会跟着长（审计席 #6206 的顺查）。
+const LABELS = { first: '首投', retry: '补投', reminder: '提醒', echo: '回音' }
+const REASONS = ['retry', 'reminder', 'echo']
+const onlyDeliberate = api.repeatLabel({ deliberate: 2, suspicious: 0, byReason: { retry: 1, reminder: 1 } }, LABELS, REASONS)
 check('设计内重复 ⇒ 分类计数（补投 1 / 提醒 1），**没有**告警行',
   onlyDeliberate.text === '↻ 设计内重复 补投 1 / 提醒 1' && onlyDeliberate.warn === '', onlyDeliberate)
-const hasSuspicious = api.repeatLabel({ deliberate: 5, suspicious: 1, byReason: { retry: 4, reminder: 1 } })
+const hasSuspicious = api.repeatLabel({ deliberate: 5, suspicious: 1, byReason: { retry: 4, reminder: 1 } }, LABELS, REASONS)
 check('★ 无标签重复 ⇒ 单独一行 ⚠ 告警（**它的出现本身**要被看见，不能藏在总数里）',
   hasSuspicious.warn !== '' && hasSuspicious.warn.includes('⚠') && hasSuspicious.warn.includes('1 条无标签重复'),
   hasSuspicious)
 check('  ★ 而分类计数**不受影响**（两类各报各的，不是合成一个数）',
   hasSuspicious.text === '↻ 设计内重复 补投 4 / 提醒 1', hasSuspicious.text)
-const suspOnly = api.repeatLabel({ deliberate: 0, suspicious: 2, byReason: {} })
+const suspOnly = api.repeatLabel({ deliberate: 0, suspicious: 2, byReason: {} }, LABELS, REASONS)
 check('只有可疑的 ⇒ 只有告警行（text 为空）', suspOnly.text === '' && suspOnly.warn.includes('2 条无标签重复'), suspOnly)
-const emptyRepeat = api.repeatLabel(undefined)
+const emptyRepeat = api.repeatLabel(undefined, LABELS, REASONS)
 check('没有重复 ⇒ 两行都空（与 pendingDeliveryLabel 同一纪律：0 不占位）',
   emptyRepeat.text === '' && emptyRepeat.warn === '', emptyRepeat)
-check('  结构钉：成员行用 repeatLabel，且告警**另起一个 warn 样式的 div**',
-  buildSrc !== null && buildSrc.includes('var repeat = repeatLabel(m.repeats)')
+const echoCase = api.repeatLabel({ deliberate: 2, suspicious: 0, byReason: { first: 1, echo: 2 } }, LABELS, REASONS)
+check('★ 新成因 echo **不用改面板**就能显示（文案由服务端给 —— 这就是"一处当源"的意思）',
+  echoCase.text === '↻ 设计内重复 回音 2', echoCase)
+const noList = api.repeatLabel({ deliberate: 1, suspicious: 0, byReason: { echo: 1 } })
+check('  ★ 连清单都不传时**用数据自己的键**兜底（仍不回落到硬编码名单）', noList.text.includes('echo 1'), noList)
+check('  结构钉：成员行用 repeatLabel，把**服务端给的清单与文案**传进去，且告警另起一个 warn 样式的 div',
+  buildSrc !== null && buildSrc.includes('var repeat = repeatLabel(m.repeats, room.repeatLabels, room.repeatReasons)')
   && buildSrc.includes("if (repeat.warn !== '') left.appendChild(el('div', S.warn, repeat.warn))"))
+// 网只看**代码**，先剥掉注释与字符串里的说明（注释里提旧 bug 名是合理的，不该红）；
+// 判据因此是："代码里不许再按成因名分支" —— 加新成因时面板不改也能显示，就不再需要这份副本。
+const srcCode = src === null ? null : src
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
+check('  ★ 源码网：面板的**代码**里不许再按成因名（retry/reminder/echo）分支 —— 同型复发就该红',
+  srcCode !== null && !/by\.(retry|reminder|echo)\b/.test(srcCode)
+  && !/'补投 '\s*\+/.test(srcCode), { has: srcCode === null ? null : /by\.(retry|reminder|echo)\b/.test(srcCode) })
 
 // 新表的变化不一定伴随消息：不进指纹，面板就会一直显示旧状态（数字说谎比没有数字更糟）
 const sigTasks = JSON.parse(JSON.stringify(base))
