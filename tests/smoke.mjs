@@ -778,6 +778,31 @@ check('  房间没了，消息还在（历史是有意留的）',
   store24.state.messages.some((m) => m.body === '好数据'), store24.state.messages.length)
 await fs.rm(root24, { recursive: true, force: true })
 
+// 重复投递的分类：**单调标志**（审计席 f008c4f2 #6201 那格"假阴性"）与 **echo 标签**
+console.log('')
+console.log('重复投递的分类（窗口只有 5 格 + 标签集合要认新成因）')
+const seqR = 9001
+store.recordDelivery(room.id, A, seqR)
+store.noteSent(room.id, A, seqR, 'first')            // 首投
+store.noteSent(room.id, A, seqR, 'first')            // ★ 无标签重复（该被抓）
+for (let i = 0; i < 6; i++) store.noteSent(room.id, A, seqR, 'reminder')   // 足够多，把它挤出 5 格窗口
+const recR = store.state.deliveries.find((d) => d.roomId === room.id && d.sessionId === A && d.seq === seqR)
+check('  前提：那个无标签的 first 已经被挤出窗口（reasons 里查不到它了）',
+  recR !== undefined && Array.isArray(recR.reasons) && recR.reasons.length === 5 && !recR.reasons.includes('first'),
+  recR === undefined ? null : recR.reasons)
+check('★ 但它**仍被算成可疑**（单调标志 —— 只从窗口重新推导就是假阴性，这正是 #6201 问的那格）',
+  recR !== undefined && recR.unlabelled === true && store.repeatSends(room.id, A).suspicious >= 1,
+  { unlabelled: recR === undefined ? null : recR.unlabelled, repeats: store.repeatSends(room.id, A) })
+const seqE = 9002
+store.recordDelivery(room.id, B, seqE)
+store.noteSent(room.id, B, seqE, 'first')
+store.noteSent(room.id, B, seqE, 'echo')             // 标签：回音（有意的重复）
+const dE = store.repeatSends(room.id, B)
+check('★ echo 被认成**有意的重复**（不是可疑）：标签集合不再硬编码 retry/reminder',
+  dE.suspicious === 0 && dE.deliberate >= 1 && dE.byReason.echo >= 1, dE)
+check('  ★ 而且它出现在 byReason 的**自己那一列**里（计数表的键也从那个集合派生）',
+  Object.prototype.hasOwnProperty.call(dE.byReason, 'echo'), dE.byReason)
+
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')

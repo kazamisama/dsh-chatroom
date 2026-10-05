@@ -17,7 +17,8 @@ process.env.DSH_CHATROOM_HOME = HOME
 // 聚合本身由 §31 单独测（它把窗口设大、再显式调 flush，不靠 sleep）。
 process.env.DSH_CHATROOM_COALESCE_MS = '0'
 
-const { apply, inject, name, isSessionLogName, classifySessionDir } = await import('../lib/index.js')
+const { apply, inject, name, isSessionLogName, classifySessionDir, REPEAT_REASON_LABEL } = await import('../lib/index.js')
+const { DELIBERATE_REPEAT_REASONS } = await import('../lib/rooms.js')
 const { rejudgeStamp } = await import('../lib/rejudge.js')
 const zlib = await import('node:zlib')
 
@@ -1789,6 +1790,15 @@ const s32Raw = JSON.parse(await fs.readFile(path.join(HOME, 'rooms.json'), 'utf8
 const s32Rec = s32Raw.deliveries.filter((d) => d.roomId === bRoomId && d.seq === s32.seq && d.sessionId === A.id)
 check('★ 回音自带成因标签 echo（有意的重复必须带标签，否则会被房间的"无标签重复"抓成事故）',
   s32Rec.length === 1 && Array.isArray(s32Rec[0].reasons) && s32Rec[0].reasons.includes('echo'), s32Rec)
+
+// 33. **防漂移**：判据里的"有意的重复"集合与显示名必须成对（加了一个却忘了另一个 ⇒ 这里红）
+console.log('33. 成因集合与显示名成对（一处当源，另一处只是渲染）')
+check('★ DELIBERATE_REPEAT_REASONS 里每个成因都有显示名（否则面板上会显示成生键名）',
+  DELIBERATE_REPEAT_REASONS.every((r) => typeof REPEAT_REASON_LABEL[r] === 'string' && REPEAT_REASON_LABEL[r] !== ''),
+  { deliberate: DELIBERATE_REPEAT_REASONS, label: REPEAT_REASON_LABEL })
+check('  ★ 而 first 在显示名里有、却**不在**那个集合里（它＝"没有新成因"，正是可疑的那一类）',
+  typeof REPEAT_REASON_LABEL.first === 'string' && !DELIBERATE_REPEAT_REASONS.includes('first'),
+  { first: REPEAT_REASON_LABEL.first, deliberate: DELIBERATE_REPEAT_REASONS })
 
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
