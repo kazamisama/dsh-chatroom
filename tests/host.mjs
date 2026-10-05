@@ -1773,23 +1773,45 @@ check('  ★ 义务帧**立即发**，而且同一人攒着的背景帧**先清�
 await coalescer.flush()   // 收尾：别把别的成员的窗口留到进程结束
 process.env.DSH_CHATROOM_COALESCE_MS = '0'       // 还原：后面的用例回到"立即发"
 
-console.log('32. 回音**每条消息只发一次** + 自带成因标签（用户 2026-10-06 实测报的）')
+console.log('32. 回音：回答**一条都不少**，而"占几个排队位"由聚合层按忙闲决定（用户 2026-10-06 两次纠正的终态）')
 await tool('room_intent').execute({ room: bRoomId, direction: '§32 回音测试：负责 web 端点', paths: ['ulysses/web/**'], excludes: [] }, exec(B))
-// A 一条消息 @ 两个人 ⇒ 两个人都回 ⇒ 作者只该被叫醒**一次**
+// A 一条消息 @ 两个人 ⇒ 两个人都回 ⇒ **两条回音都在**（撤回了"只发第一条"那一版：
+// 那会让 A 只收到 B 的回答、**永远读不到 C 的** —— 而 A 可能问的是两件事）
 const s32 = await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(B.id) + ' @' + shortOf(E.id) + ' 请两位各回一句' }, exec(A))
 const s32From = callsOf(A).length
 await tool('room_judge').execute({ room: bRoomId, seq: s32.seq, verdict: 'catch-up', note: 'B 先回' }, exec(B))
-const s32First = callsOf(A).slice(s32From)
 await tool('room_judge').execute({ room: bRoomId, seq: s32.seq, verdict: 'unaffected', note: 'E 后回' }, exec(E))
 const s32Both = callsOf(A).slice(s32From)
-check('★ 第一个回话的 @ 对象 ⇒ 作者收到一条回音（叫醒它 —— 这正是回音存在的理由）',
-  s32First.length === 1 && s32First[0].mode === 'followup', s32First.map((c) => c.mode))
-check('★ **第二个**回话的人 ⇒ **不再**回音（否则 @ N 人 = N 次叫醒；实测 #6071 就是 5 次）',
-  s32Both.length === 1, s32Both.map((c) => c.message.content[0].text.slice(0, 90)))
+check('★ 两个人都回了 ⇒ 作者收到**两条**回音（第一条之后的不许被吞掉）',
+  s32Both.length === 2 && s32Both.every((c) => c.mode === 'followup'),
+  s32Both.map((c) => c.message.content[0].text.slice(0, 70)))
+check('  ★ 而且两条各自带着自己的回话人（B 的与 E 的都在，不是只报一个）',
+  s32Both.some((c) => c.message.content[0].text.includes(shortOf(B.id)))
+  && s32Both.some((c) => c.message.content[0].text.includes(shortOf(E.id))),
+  s32Both.map((c) => c.message.content[0].text.slice(0, 60)))
 const s32Raw = JSON.parse(await fs.readFile(path.join(HOME, 'rooms.json'), 'utf8'))
 const s32Rec = s32Raw.deliveries.filter((d) => d.roomId === bRoomId && d.seq === s32.seq && d.sessionId === A.id)
 check('★ 回音自带成因标签 echo（有意的重复必须带标签，否则会被房间的"无标签重复"抓成事故）',
   s32Rec.length === 1 && Array.isArray(s32Rec[0].reasons) && s32Rec[0].reasons.includes('echo'), s32Rec)
+// ★ **忙时合并**（用户"聚合非常有必要"那一半）：作者在跑 ⇒ 用长窗口 ⇒ 三条并成一条
+const s32IdleStatus = A.status
+A.status = 'running'
+process.env.DSH_CHATROOM_COALESCE_MS = '60000'
+const s32FromBusy = callsOf(A).length
+for (let i = 0; i < 3; i++) {
+  const q = await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(B.id) + ' 忙时合并第 ' + (i + 1) + ' 问' }, exec(A))
+  await tool('room_judge').execute({ room: bRoomId, seq: q.seq, verdict: 'catch-up', note: '第 ' + (i + 1) + ' 条回音' }, exec(B))
+}
+check('  ★ 作者在忙 ⇒ 三条回音**先攒着**（不各占一个排队位）',
+  callsOf(A).length === s32FromBusy && coalescer.pending() >= 3,
+  { 新增: callsOf(A).length - s32FromBusy, pending: coalescer.pending() })
+await coalescer.flush()
+const s32Busy = callsOf(A).slice(s32FromBusy)
+check('  ★ flush 后**并成一条**（三条内容都在，只是少占两个排队位）',
+  s32Busy.length === 1 && s32Busy[0].message.content[0].text.includes('合并 3 条'),
+  s32Busy.map((c) => c.message.content[0].text.slice(0, 100)))
+process.env.DSH_CHATROOM_COALESCE_MS = '0'
+A.status = s32IdleStatus
 
 // 33. **防漂移**：判据里的"有意的重复"集合与显示名必须成对（加了一个却忘了另一个 ⇒ 这里红）
 console.log('33. 成因集合与显示名成对（一处当源，另一处只是渲染）')
