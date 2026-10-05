@@ -1628,25 +1628,32 @@ const s27AtSay = await tool('room_say').execute({
 check('  ★ 对照：真 @ 了他 ⇒ **不再**提示他',
   !s27AtSay.text.includes('📌 正文提到了 ' + shortOf(B.id)), s27AtSay.text.slice(-200))
 
-// ② 回执回声：A 发的消息被 B 表态后，A 应收到一条**一行 inject**（不唤醒、不登记义务）
+// ② 回执回声：A 发的消息被 B 表态后，A 应收到一条**叫醒**（followup）＋一行（digest）＋不登记义务。
+//    〔2026-10-04 用户实测报的硬伤〕第一版是 inject —— **inject 不叫醒空闲会话** ⇒ A 问完问题就永远停在那里。
+//    必须是 followup（与唤醒席 watch=wake 在 fanout 里拿到的同一档形状）。
 const s27EchoDecl = await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(B.id) + ' 回声测试：请回一句' }, exec(A))
 const s27EchoFrom = callsOf(A).length
 const s27BeforeEcho = JSON.stringify((await rpc('state', {})).value.rooms
   .find((r) => r.room.id === bRoomId).members.find((x) => x.shortId === shortOf(A.id)).owedSeqs)
 await tool('room_judge').execute({ room: bRoomId, seq: s27EchoDecl.seq, verdict: 'catch-up', note: '回声测试的备注' }, exec(B))
-const s27EchoCalls = callsOf(A).slice(s27EchoFrom).filter((c) => c.mode === 'inject')
-check('★ 对方表态后，发起人收到一条 **inject 回声**（能读出"谁、什么 verdict、note"）',
+const s27EchoCalls = callsOf(A).slice(s27EchoFrom).filter((c) => c.mode === 'followup')
+check('★ 对方表态后，发起人收到一条 **followup 回声 ＝ 真的把它叫醒**（inject 收得到但不动）',
   s27EchoCalls.length === 1
-  && s27EchoCalls[0].message.content[0].text.includes('收到 ' + shortOf(B.id) + ' 的表态：catch-up')
+  && s27EchoCalls[0].message.content[0].text.includes('有回音') && s27EchoCalls[0].message.content[0].text.includes(shortOf(B.id) + ' 表态 catch-up')
   && s27EchoCalls[0].message.content[0].text.includes('回声测试的备注'),
   s27EchoCalls.map((c) => c.message.content[0].text.slice(0, 160)))
 const s27AfterEcho = JSON.stringify((await rpc('state', {})).value.rooms
   .find((r) => r.room.id === bRoomId).members.find((x) => x.shortId === shortOf(A.id)).owedSeqs)
-check('  ★ 它是**一行**（digest）、且**不是 followup**：不唤醒发起人、不登记义务',
+check('  ★ 它只给**一行**（digest：不是全文重投），且正文写明"不需要你回一句"',
   s27EchoCalls.length === 1 && s27EchoCalls[0].message.content[0].text.length < 400
-  && callsOf(A).slice(s27EchoFrom).every((c) => c.mode !== 'followup'),
+  && s27EchoCalls[0].message.content[0].text.includes('不需要你回一句'),
   { modes: callsOf(A).slice(s27EchoFrom).map((c) => c.mode), len: s27EchoCalls.length === 0 ? 0 : s27EchoCalls[0].message.content[0].text.length })
 check('  ★ 发起人**没有**因此多欠任何东西（回声不是义务）', s27BeforeEcho === s27AfterEcho, { s27BeforeEcho, s27AfterEcho })
+// 负向：**没 @ 他的旁人来表态**不该叫醒作者（否则旁人的自发表态会把作者吵醒 —— 那才是噪声）
+const s27QuietFrom = callsOf(A).length
+await tool('room_judge').execute({ room: bRoomId, seq: s27EchoDecl.seq, verdict: 'unaffected', note: '旁人插一句' }, exec(C))
+check('  ★ 对照：**没被 @ 的旁人**来表态 ⇒ **不叫醒**作者（回声只治"你要的那一句"）',
+  callsOf(A).length === s27QuietFrom, { 新增投递: callsOf(A).slice(s27QuietFrom).map((c) => c.mode) })
 
 console.log('28. 任务命中别人领地 ⇒ **@ 那位 owner**（用户 2026-10-04 裁定"要"；此前只警告发起人）')
 await tool('room_intent').execute({ room: bRoomId, direction: '§28 任务越界测试：负责 web 端点', paths: ['ulysses/web/**'], excludes: [] }, exec(B))
