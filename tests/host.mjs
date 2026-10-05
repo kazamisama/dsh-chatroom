@@ -1772,6 +1772,24 @@ check('  ★ 义务帧**立即发**，而且同一人攒着的背景帧**先清�
 await coalescer.flush()   // 收尾：别把别的成员的窗口留到进程结束
 process.env.DSH_CHATROOM_COALESCE_MS = '0'       // 还原：后面的用例回到"立即发"
 
+console.log('32. 回音**每条消息只发一次** + 自带成因标签（用户 2026-10-06 实测报的）')
+await tool('room_intent').execute({ room: bRoomId, direction: '§32 回音测试：负责 web 端点', paths: ['ulysses/web/**'], excludes: [] }, exec(B))
+// A 一条消息 @ 两个人 ⇒ 两个人都回 ⇒ 作者只该被叫醒**一次**
+const s32 = await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(B.id) + ' @' + shortOf(E.id) + ' 请两位各回一句' }, exec(A))
+const s32From = callsOf(A).length
+await tool('room_judge').execute({ room: bRoomId, seq: s32.seq, verdict: 'catch-up', note: 'B 先回' }, exec(B))
+const s32First = callsOf(A).slice(s32From)
+await tool('room_judge').execute({ room: bRoomId, seq: s32.seq, verdict: 'unaffected', note: 'E 后回' }, exec(E))
+const s32Both = callsOf(A).slice(s32From)
+check('★ 第一个回话的 @ 对象 ⇒ 作者收到一条回音（叫醒它 —— 这正是回音存在的理由）',
+  s32First.length === 1 && s32First[0].mode === 'followup', s32First.map((c) => c.mode))
+check('★ **第二个**回话的人 ⇒ **不再**回音（否则 @ N 人 = N 次叫醒；实测 #6071 就是 5 次）',
+  s32Both.length === 1, s32Both.map((c) => c.message.content[0].text.slice(0, 90)))
+const s32Raw = JSON.parse(await fs.readFile(path.join(HOME, 'rooms.json'), 'utf8'))
+const s32Rec = s32Raw.deliveries.filter((d) => d.roomId === bRoomId && d.seq === s32.seq && d.sessionId === A.id)
+check('★ 回音自带成因标签 echo（有意的重复必须带标签，否则会被房间的"无标签重复"抓成事故）',
+  s32Rec.length === 1 && Array.isArray(s32Rec[0].reasons) && s32Rec[0].reasons.includes('echo'), s32Rec)
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')
