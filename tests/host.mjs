@@ -1655,6 +1655,19 @@ await tool('room_judge').execute({ room: bRoomId, seq: s27EchoDecl.seq, verdict:
 check('  ★ 对照：**没被 @ 的旁人**来表态 ⇒ **不叫醒**作者（回声只治"你要的那一句"）',
   callsOf(A).length === s27QuietFrom, { 新增投递: callsOf(A).slice(s27QuietFrom).map((c) => c.mode) })
 
+console.log('27b. 没有 @ 任何人 ⇒ 把"不叫醒"的后果写在返回值里（用户 2026-10-06 裁定做）')
+const s27bQuiet = await tool('room_say').execute({ room: bRoomId, text: '背景：这条谁也没 @，纯记录' }, exec(A))
+check('★ 没 @ 任何人 ⇒ 返回值明说走背景投递、**空闲会话不会被叫醒**（后果写在决定处）',
+  s27bQuiet.text.includes('没有 @ 任何人') && s27bQuiet.text.includes('不会被叫醒'),
+  s27bQuiet.text.slice(-220))
+const s27bAwake = await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(B.id) + ' 这条 @ 了人' }, exec(A))
+check('  ★ 对照：@ 了人 ⇒ 不再提示（这句只治"没 @"的那一类）',
+  !s27bAwake.text.includes('没有 @ 任何人'), s27bAwake.text.slice(-160))
+// wake=false 也是"不叫醒"的一类（它把 mentions 抑制掉 ⇒ 同样不该静悄悄地过）
+const s27bFlag = await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(B.id) + ' 但你不用回', wake: false }, exec(A))
+check('  ★ wake=false（@ 被抑制）⇒ 也提示这一句（这才是它真实的投递语义）',
+  s27bFlag.text.includes('不会被叫醒'), s27bFlag.text.slice(-200))
+
 console.log('28. 任务命中别人领地 ⇒ **@ 那位 owner**（用户 2026-10-04 裁定"要"；此前只警告发起人）')
 await tool('room_intent').execute({ room: bRoomId, direction: '§28 任务越界测试：负责 web 端点', paths: ['ulysses/web/**'], excludes: [] }, exec(B))
 const tB0 = callsOf(B).length
