@@ -1764,12 +1764,20 @@ const s31BgFrom = callsOf(E).length
 await tool('room_say').execute({ room: bRoomId, text: '一条没有 @ 的背景（唤醒席才收得到）' }, exec(A))
 check('  ★ 背景帧同样进窗口（不立刻发 —— 它正是排队位的来源）',
   callsOf(E).length === s31BgFrom, { 新增: callsOf(E).length - s31BgFrom })
-// 对照二：**义务帧不许被聚合推迟** —— 它要立刻发，且把同一人攒着的背景**先清出去**（顺序不能反）
+// 对照二：**义务帧也进同一个窗口**（用户 2026-10-06：他截图里那 4 条排队消息**全是义务帧**）⇒
+// 背景与义务**并成一条**、且**顺序保持**（背景在前、义务在后），整批按 followup 发（义务要叫醒）。
 await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(E.id) + ' 这一条要你回一句（义务帧）' }, exec(A))
+check('  ★ 义务帧与背景帧**一起攒着**（窗口内谁也不单独占一个排队位）',
+  callsOf(E).length === s31BgFrom && coalescer.pending() >= 2,
+  { 新增: callsOf(E).length - s31BgFrom, pending: coalescer.pending() })
+await coalescer.flush()
 const s31E = callsOf(E).slice(s31BgFrom)
-check('  ★ 义务帧**立即发**，而且同一人攒着的背景帧**先清出去**（顺序：背景在前、义务在后）',
-  s31E.length === 2 && s31E[0].mode === 'inject' && s31E[1].mode === 'followup',
-  s31E.map((c) => c.mode + ' :: ' + c.message.content[0].text.slice(0, 80)))
+const s31Txt = s31E.length === 1 ? s31E[0].message.content[0].text : ''
+check('  ★ flush 后**并成一条**：背景在前、义务在后（顺序不乱），整批 followup',
+  s31E.length === 1 && s31E[0].mode === 'followup'
+  && s31Txt.includes('一条没有 @ 的背景') && s31Txt.includes('这一条要你回一句')
+  && s31Txt.indexOf('这一条要你回一句') > s31Txt.indexOf('一条没有 @ 的背景'),
+  s31E.map((c) => c.mode + ' :: ' + c.message.content[0].text.slice(0, 110)))
 await coalescer.flush()   // 收尾：别把别的成员的窗口留到进程结束
 process.env.DSH_CHATROOM_COALESCE_MS = '0'       // 还原：后面的用例回到"立即发"
 
@@ -1814,6 +1822,31 @@ process.env.DSH_CHATROOM_COALESCE_MS = '0'
 A.status = s32IdleStatus
 
 // 33. **防漂移**：判据里的"有意的重复"集合与显示名必须成对（加了一个却忘了另一个 ⇒ 这里红）
+console.log('34. 忙时**攒到它空下来**（用户 2026-10-06 的截图：4 条排队消息全是义务帧）')
+const s34Status = E.status
+E.status = 'running'
+process.env.DSH_CHATROOM_COALESCE_MS = '60000'
+const s34From = callsOf(E).length
+const s34a = await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(E.id) + ' 忙时第一条（义务）' }, exec(A))
+const s34b = await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(E.id) + ' 忙时第二条（义务）' }, exec(A))
+check('★ 收件人忙 ⇒ 两条义务帧都**先攒着**（不各占一个排队位 —— 它反正一条也读不到）',
+  callsOf(E).length === s34From && coalescer.pending() >= 2,
+  { 新增: callsOf(E).length - s34From, pending: coalescer.pending() })
+await coalescer.tick()
+check('  ★ 手动跑一轮轮询、而它**还忙着** ⇒ 仍然不发（攒到空下来才算数）',
+  callsOf(E).length === s34From && coalescer.pending() >= 2,
+  { 新增: callsOf(E).length - s34From, pending: coalescer.pending() })
+E.status = 'idle'
+await coalescer.tick()
+const s34Calls = callsOf(E).slice(s34From)
+const s34Txt = s34Calls.length === 1 ? s34Calls[0].message.content[0].text : ''
+check('  ★ 它一空下来 ⇒ **并成一条** followup（两条各自带自己的 #seq，内容都在）',
+  s34Calls.length === 1 && s34Calls[0].mode === 'followup'
+  && s34Txt.includes('#' + s34a.seq) && s34Txt.includes('#' + s34b.seq),
+  s34Calls.map((c) => c.mode + ' :: ' + c.message.content[0].text.slice(0, 120)))
+process.env.DSH_CHATROOM_COALESCE_MS = '0'
+E.status = s34Status
+
 console.log('33. 成因集合与显示名成对（一处当源，另一处只是渲染）')
 check('★ DELIBERATE_REPEAT_REASONS 里每个成因都有显示名（否则面板上会显示成生键名）',
   DELIBERATE_REPEAT_REASONS.every((r) => typeof REPEAT_REASON_LABEL[r] === 'string' && REPEAT_REASON_LABEL[r] !== ''),
