@@ -793,6 +793,16 @@ check('  前提：那个无标签的 first 已经被挤出窗口（reasons 里�
 check('★ 但它**仍被算成可疑**（单调标志 —— 只从窗口重新推导就是假阴性，这正是 #6201 问的那格）',
   recR !== undefined && recR.unlabelled === true && store.repeatSends(room.id, A).suspicious >= 1,
   { unlabelled: recR === undefined ? null : recR.unlabelled, repeats: store.repeatSends(room.id, A) })
+// ★ 它 #6204③ 问的那个场景：**销账之前就已经被挤出窗口**的那种，标志也必须还在。
+// （置位发生在**每次真的送出去**那一刻；销账只是把它**复制**进留痕，不再推导。）
+await store.ackDelivery(room.id, A, seqR)
+const histR = store.state.deliveryHistory.find((h) => h.roomId === room.id && h.sessionId === A && h.seq === seqR)
+check('★ 销账后标志**跟着折进留痕**（不是重新推导 —— 窗口早就不含那次无标签重复）',
+  histR !== undefined && histR.unlabelled === true
+  && !(Array.isArray(histR.reasons) && histR.reasons.includes('first')), histR)
+check('  ★ 而且销账之后**照样算可疑**（判据同时数在册的与留痕的）',
+  store.repeatSends(room.id, A).suspicious >= 1, store.repeatSends(room.id, A))
+
 const seqE = 9002
 store.recordDelivery(room.id, B, seqE)
 store.noteSent(room.id, B, seqE, 'first')
