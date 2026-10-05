@@ -13,6 +13,9 @@ import { promisify } from 'node:util'
 
 const HOME = path.join(os.tmpdir(), 'dsh-chatroom-host-' + Date.now())
 process.env.DSH_CHATROOM_HOME = HOME
+// **帧聚合关掉**（ms=0 ⇒ 立即发，与聚合前逐字相同）：本文件几百条断言依赖"投完立刻可查"。
+// 聚合本身由 §31 单独测（它把窗口设大、再显式调 flush，不靠 sleep）。
+process.env.DSH_CHATROOM_COALESCE_MS = '0'
 
 const { apply, inject, name, isSessionLogName, classifySessionDir } = await import('../lib/index.js')
 const { rejudgeStamp } = await import('../lib/rejudge.js')
@@ -1723,6 +1726,51 @@ check('  ★ 且**销账后重复计数不归零**（否则"被投过两次"恰�
 const s29Normal = await tool('room_message').execute({ room: bRoomId, seq: s27EchoDecl.seq }, exec(A))
 check('  ★ 对照：正常单投的消息**没有**留痕行（表只装异常与重复）',
   !s29Normal.text.includes('投递留痕'), s29Normal.text.split('\n').filter((l) => l.includes('投递')).slice(0, 3))
+
+console.log('31. 帧聚合：只聚合"不需要回"的那一类（用户 2026-10-06：排队消息能聚合发送吗）')
+const coalescer = effects.find((x) => String(x.label).includes('帧聚合')).d
+check('聚合器的测试句柄在（flush / pending —— 不靠 sleep）',
+  typeof coalescer.flush === 'function' && typeof coalescer.pending === 'function')
+process.env.DSH_CHATROOM_COALESCE_MS = '60000'   // 窗口开大：不会自己 flush，全由测试显式驱动
+// 三条"回执回声"给同一个人（A @B 三次、B 各回一次 ⇒ A 收到三条 wake 帧）
+const s31Seqs = []
+for (let i = 0; i < 3; i++) {
+  const q = await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(B.id) + ' 聚合测试第 ' + (i + 1) + ' 问' }, exec(A))
+  s31Seqs.push(q.seq)
+}
+const s31Before = callsOf(A).length
+const s31Pending0 = coalescer.pending()
+for (const seq of s31Seqs) {
+  await tool('room_judge').execute({ room: bRoomId, seq, verdict: 'catch-up', note: '第 ' + seq + ' 条的回音' }, exec(B))
+}
+check('★ 窗口内**先攒着**（没有立刻各自发出去 —— 这正是排队消息的成因）',
+  coalescer.pending() >= s31Pending0 + 3 && callsOf(A).length === s31Before,
+  { pending: coalescer.pending(), 新增投递: callsOf(A).length - s31Before })
+await coalescer.flush()
+const s31Calls = callsOf(A).slice(s31Before)
+check('★ flush 后**合成一条**发出去（三个排队位 → 一个）',
+  s31Calls.length === 1 && s31Calls[0].message.content[0].text.includes('合并 3 条'), s31Calls.map((c) => c.message.content[0].text.slice(0, 120)))
+const s31Text = s31Calls.length === 1 ? s31Calls[0].message.content[0].text : ''
+check('  ★ 三条**各自独立**都在里面（各自的 #seq 与短号都在 —— 合并不丢内容）',
+  s31Seqs.every((s) => s31Text.includes('#' + s)) && s31Text.includes(shortOf(B.id)),
+  s31Text.slice(0, 400))
+check('  ★ 这批里有"要叫醒"的 ⇒ 整批按 **followup** 发（唤醒不能因为聚合丢掉）',
+  s31Calls.length === 1 && s31Calls[0].mode === 'followup', s31Calls.map((c) => c.mode))
+// 对照一：背景帧也进窗口，不立刻发。
+// 用 **E（唤醒席 watch=wake）**：背景帧只推给 all/feed/wake —— quiet（默认）那一档按设计**走"拉"**，
+// 它本来就不该收到背景帧（我第一版拿 B（默认档）测，测出的是 skipInject 的语义，不是聚合的语义）。
+const s31BgFrom = callsOf(E).length
+await tool('room_say').execute({ room: bRoomId, text: '一条没有 @ 的背景（唤醒席才收得到）' }, exec(A))
+check('  ★ 背景帧同样进窗口（不立刻发 —— 它正是排队位的来源）',
+  callsOf(E).length === s31BgFrom, { 新增: callsOf(E).length - s31BgFrom })
+// 对照二：**义务帧不许被聚合推迟** —— 它要立刻发，且把同一人攒着的背景**先清出去**（顺序不能反）
+await tool('room_say').execute({ room: bRoomId, text: '@' + shortOf(E.id) + ' 这一条要你回一句（义务帧）' }, exec(A))
+const s31E = callsOf(E).slice(s31BgFrom)
+check('  ★ 义务帧**立即发**，而且同一人攒着的背景帧**先清出去**（顺序：背景在前、义务在后）',
+  s31E.length === 2 && s31E[0].mode === 'inject' && s31E[1].mode === 'followup',
+  s31E.map((c) => c.mode + ' :: ' + c.message.content[0].text.slice(0, 80)))
+await coalescer.flush()   // 收尾：别把别的成员的窗口留到进程结束
+process.env.DSH_CHATROOM_COALESCE_MS = '0'       // 还原：后面的用例回到"立即发"
 
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
