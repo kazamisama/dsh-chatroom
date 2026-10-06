@@ -258,6 +258,19 @@ const eRooms = grab(() => assertStateShape(badRooms))
 check('rooms 类型不对被点出来', eRooms !== null && String(eRooms.message).includes('state.rooms 必须是数组'),
   eRooms === null ? null : eRooms.message)
 
+// ★ 另一处漏网的同类：`describe()` 把**收到的值**截进错误文案，而这条文案会**回给调用方 agent** ⇒
+// 切在代理对中间就会带一个孤立代理项出去（真机 2026-10-07 的同类事故）。
+const badLong = makeState()
+badLong.rooms = 'x'.repeat(39) + '\uD83D\uDD34' + 'y'.repeat(90)   // 第 40 格切在一对中间
+const eLong = grab(() => assertStateShape(badLong))
+const ORPHAN = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+check('  反例真的构造出来了（被描述的那个值第 40 格是一对的前半）',
+  badLong.rooms.length > 40 && badLong.rooms.charCodeAt(39) >= 0xD800 && badLong.rooms.charCodeAt(39) <= 0xDBFF,
+  [badLong.rooms.length, badLong.rooms.charCodeAt(39).toString(16)])
+check('★ describe 截出来的错误文案里**没有**孤立代理项（它进调用方 agent 的上下文）',
+  eLong !== null && eLong.problems.length > 0 && eLong.problems.every((p) => !ORPHAN.test(String(p.message))),
+  eLong === null ? null : eLong.problems.map((p) => String(p.message).slice(0, 70)))
+
 const badSeq = makeState()
 badSeq.messages = badSeq.messages.concat([
   { seq: 2, roomId: 'room-a', sender: { user: true }, kind: 'free', body: '重复 seq', refs: [], terminal: false, ts: 3 },

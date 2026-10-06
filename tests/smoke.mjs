@@ -6,6 +6,7 @@ import {
   structuredPaths, memberOwnership, matchesOwnedPath, suspectGlobs, bareTokens, cleanPathList, DIRECTION_MAX_CHARS,
   extraFilesOwnerNote,
 } from '../lib/rooms.js'
+import { sliceUnits } from '../lib/slice.js'
 
 const root = path.join(os.tmpdir(), 'dsh-chatroom-smoke-' + Date.now())
 let pass = 0
@@ -812,6 +813,32 @@ check('★ echo 被认成**有意的重复**（不是可疑）：标签集合不
   dE.suspicious === 0 && dE.deliberate >= 1 && dE.byReason.echo >= 1, dE)
 check('  ★ 而且它出现在 byReason 的**自己那一列**里（计数表的键也从那个集合派生）',
   Object.prototype.hasOwnProperty.call(dE.byReason, 'echo'), dE.byReason)
+
+// 文本截断不许切在代理对中间（真机 2026-10-07：坏帧把别人的会话 400 锁死）
+console.log('')
+console.log('sliceUnits：切点安全化（叶子模块，宿主/状态机/写前体检三处共用）')
+check('头切：切点落在一对中间 ⇒ 少切一格（宁可少一格，不留孤立高代理）',
+  sliceUnits('ab\uD83D\uDD34cd', 3) === 'ab', sliceUnits('ab\uD83D\uDD34cd', 3))
+check('尾切：切点落在一对中间 ⇒ 多取一格（不留孤立低代理）',
+  sliceUnits('ab\uD83D\uDD34cd', 3, true) === 'cd', sliceUnits('ab\uD83D\uDD34cd', 3, true))
+check('切点不落在一对中间时**不动**（码元预算不缩水）',
+  sliceUnits('abcde', 3) === 'abc' && sliceUnits('abcde', 3, true) === 'cde',
+  [sliceUnits('abcde', 3), sliceUnits('abcde', 3, true)])
+check('短于预算 / 空 / undefined / null 都不炸',
+  sliceUnits('ab', 5) === 'ab' && sliceUnits('', 3) === '' && sliceUnits(undefined, 3) === '' && sliceUnits(null, 3) === '')
+const ORPHAN = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+// ⚠ **另一处漏网**（顺查）：路径条目太长的**错误文案会回给调用方 agent**，而 token 是 agent 写的 ⇒ 同一类。
+// 这条网先**自证反例真的构造出来了**，再断言文案里没有孤立代理项。
+// 前缀 39 格 + 星平面字符 ⇒ **第 40 格正好切在一对中间**（错误文案切的就是 40），而总长 > 上限 ⇒ 会抛。
+const longTok = 'x'.repeat(39) + '\uD83D\uDD34' + 'y'.repeat(300)   // 上限是 200 格
+let longMsg = ''
+try { cleanPathList([longTok, longTok], '测试边界') } catch (e) { longMsg = String(e.message) }
+check('  反例真的构造出来了（第 40 格切在一对中间）',
+  longTok.length > 40 && longTok.charCodeAt(39) >= 0xD800 && longTok.charCodeAt(39) <= 0xDBFF
+  && longTok.charCodeAt(40) >= 0xDC00 && longTok.charCodeAt(40) <= 0xDFFF,
+  [longTok.length, longTok.charCodeAt(39).toString(16), longTok.charCodeAt(40).toString(16)])
+check('★ 而错误文案里**没有**孤立代理项（文案会进调用方 agent 的上下文）',
+  longMsg !== '' && !ORPHAN.test(longMsg), longMsg.slice(0, 90))
 
 await fs.rm(root, { recursive: true, force: true })
 console.log('')
