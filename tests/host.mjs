@@ -1818,6 +1818,19 @@ const s32Busy = callsOf(A).slice(s32FromBusy)
 check('  ★ flush 后**并成一条**（三条内容都在，只是少占两个排队位）',
   s32Busy.length === 1 && s32Busy[0].message.content[0].text.includes('合并 3 条'),
   s32Busy.map((c) => c.message.content[0].text.slice(0, 100)))
+check('  ★ 而并了的那句文案按事实说：**要回的那几条照旧要回**（旧文案说"本来都不要求回执"，义务帧进聚合后它就成了假话）',
+  s32Busy.length === 1 && s32Busy[0].message.content[0].text.includes('要回的那几条照旧要回')
+  && !s32Busy[0].message.content[0].text.includes('本来都不要求任何人回执'),
+  s32Busy.length === 1 ? s32Busy[0].message.content[0].text.slice(-120) : null)
+// **帧标识**：并了的三条应盖同一个 frameId ⇒「N 条记录里有几帧」第一次变成可测的
+// （在此之前，台账里 reasons 只能说明投了几次，说不出几帧 —— 那正是用户反复在问的事 ✗）
+const s32Raw2 = JSON.parse(await fs.readFile(path.join(HOME, 'rooms.json'), 'utf8'))
+const s32Frames = s32Raw2.deliveries.filter((d) => d.roomId === bRoomId && d.sessionId === A.id && d.frameId)
+check('  ★ 同一帧里的各条盖**同一个 frameId**，且它不是空串（"几帧"从此可测）',
+  s32Frames.length >= 3
+  && new Set(s32Frames.map((d) => d.frameId)).size <= s32Frames.length - 2
+  && s32Frames.every((d) => typeof d.frameId === 'string' && d.frameId.startsWith('fr-')),
+  s32Frames.map((d) => '#' + d.seq + ':' + d.frameId))
 process.env.DSH_CHATROOM_COALESCE_MS = '0'
 A.status = s32IdleStatus
 
