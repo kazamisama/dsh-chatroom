@@ -1882,6 +1882,36 @@ check('★ 面板载荷带 repeatReasons / repeatLabels（面板不改也能显�
   && s33.repeatLabels !== undefined && typeof s33.repeatLabels.echo === 'string',
   { reasons: s33.repeatReasons, labels: s33.repeatLabels })
 
+// 35. 已完成/已撤销的**从面板撤掉并归档**（用户 2026-10-06：「可查但不需要让大家看得眼花缭乱」）
+console.log('35. 任务板只发进行中的；归档的留在 state 里可查（list 的默认口径 + 载荷）')
+const s35 = await tool('room_task').execute({ room: bRoomId, op: 'create', title: '§35 会做完的任务', expectPaths: [] }, exec(A))
+const s35id = (s35.text.match(/task-\d+/) || [])[0]
+await tool('room_task').execute({ room: bRoomId, op: 'claim', taskId: s35id }, exec(A))
+const s35done = await tool('room_task').execute({ room: bRoomId, op: 'update', taskId: s35id, status: 'done' }, exec(A))
+check('  前提：这条任务已置为 done', s35done.ok === true && s35done.text.includes('done'), s35done.text.slice(0, 120))
+const s35def = await tool('room_task').execute({ room: bRoomId, op: 'list' }, exec(A))
+check('★ 默认 list **不列已完成**的（这正是"看得眼花缭乱"的来源）',
+  !s35def.text.includes('§35 会做完的任务'), s35def.text.slice(0, 200))
+check('  ★ 但**说清撤掉了多少、怎么查**（撤掉 ≠ 丢掉：不写查法，任务会像是没了）',
+  s35def.text.includes('已归档') && s35def.text.includes('status=done'), s35def.text.slice(-220))
+const s35doneList = await tool('room_task').execute({ room: bRoomId, op: 'list', status: 'done' }, exec(A))
+check('  ★ status=done 显式要 ⇒ 查得到（可查不是口号）',
+  s35doneList.ok === true && s35doneList.text.includes('§35 会做完的任务'), s35doneList.text.slice(0, 200))
+const s35all = await tool('room_task').execute({ room: bRoomId, op: 'list', status: 'all' }, exec(A))
+check('  ★ status=all ⇒ 全部（含归档）', s35all.text.includes('§35 会做完的任务') && s35all.text.includes('全部'), s35all.text.slice(0, 120))
+const s35payload = (await rpc('state', {})).value.rooms.find((r) => r.room.id === bRoomId)
+check('★ 面板载荷的 tasks **只有进行中的**（归档的不往面板上堆）',
+  Array.isArray(s35payload.tasks) && !s35payload.tasks.some((t) => t.id === s35id)
+  && s35payload.tasks.every((t) => t.status === 'open' || t.status === 'claimed'),
+  s35payload.tasks.map((t) => t.id + ':' + t.status))
+check('  ★ 载荷另给 taskCounts（含中文名，面板不认识状态词）与 done 的计数',
+  Array.isArray(s35payload.taskCounts)
+  && s35payload.taskCounts.some((c) => c.status === 'done' && c.count >= 1 && typeof c.label === 'string'),
+  s35payload.taskCounts)
+check('  ★ 进行中的行自带 statusLabel（中文名由服务端给）',
+  s35payload.tasks.length === 0 || s35payload.tasks.every((t) => typeof t.statusLabel === 'string' && t.statusLabel !== ''),
+  s35payload.tasks.map((t) => t.statusLabel))
+
 await fs.rm(HOME, { recursive: true, force: true })
 console.log('')
 console.log('RESULT  ' + pass + ' passed, ' + fail + ' failed')

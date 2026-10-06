@@ -53,7 +53,8 @@ const NAMES = [
   // 拉取的分布（2026-09-16 方案 a：最大值读不出"尖峰还是常态"）
   'recentStats',
   // 任务板 + 投递台账（宿主新加的两张表：字段缺失 / 不是数组 / 元素缺字段都要容错）
-  'taskStatusLabel', 'taskRowsOf', 'taskLineOf', 'pendingDeliveryLabel',
+  // 〔2026-10-06〕`taskStatusLabel` 已从客户端**删掉**（那是状态词表的第二份副本 ✗）：中文名由载荷给。
+  'taskRowsOf', 'taskLineOf', 'taskArchiveLine', 'pendingDeliveryLabel',
   // 重复投递的两类**分开显示**（审计席 #5419：可疑的那一类不能被总数盖住）
   'repeatLabel',
   // 「这个面板自己花了多少」的一行读数（宿主载荷的 ms.build + 本机停摆探针的**同一窗口**计数）
@@ -578,10 +579,16 @@ console.log('23. 任务板 + 投递台账（宿主新加的两张表：面板只
 // 一份「宿主已经改完」的合成载荷（形状照冻结协议写）
 const tasksRoom = {
   tasks: [
-    { id: 't1', title: '浏览器半侧任务板', status: 'claimed', owner: 'session-aaaa1111-1',
+    // 中文名现在**由载荷给**（`statusLabel`）—— 面板不认识状态词（2026-10-06 删掉了它自带的那份映射）。
+    { id: 't1', title: '浏览器半侧任务板', status: 'claimed', statusLabel: '已认领', owner: 'session-aaaa1111-1',
       deps: [], expectPaths: ['lib/client.js'], updatedAt: 11 },
-    { id: 't2', title: '宿主侧投递台账', status: 'open', owner: null,
+    { id: 't2', title: '宿主侧投递台账', status: 'open', statusLabel: '待认领', owner: null,
       deps: ['t1'], expectPaths: [], updatedAt: 12 },
+  ],
+  // 归档计数（服务端只发进行中的任务，撤掉的那批靠这一行说清"去哪了"）
+  taskCounts: [
+    { status: 'done', label: '已完成', count: 12 },
+    { status: 'dropped', label: '已搁置', count: 3 },
   ],
 }
 const trows = api.taskRowsOf(tasksRoom)
@@ -616,6 +623,20 @@ check('  deps / expectPaths 里的 null、空串、非数组成员都被丢掉',
   && JSON.stringify(api.taskRowsOf({ tasks: [{ deps: [null, '', 't1', undefined], expectPaths: 'x' }] })[0])
     .includes('"expectPaths":[]'))
 check('taskLineOf 空输入不炸', api.taskLineOf(undefined) === '' && api.taskLineOf(null) === '')
+// ④ **归档那一行**（2026-10-06 用户裁定：已完成/已撤销的从面板撤掉并归档，可查但别让人眼花）
+const archLine = api.taskArchiveLine(tasksRoom)
+check('★ 归档计数来自载荷（中文名也来自载荷 —— 面板不认识状态词）',
+  archLine.includes('已完成 12') && archLine.includes('已搁置 3'), archLine)
+check('  ★ 而且说清**怎么查**（撤掉 ≠ 丢了：不写查法，任务会像是没了）',
+  archLine.includes('room_task') && archLine.includes('status=done') && archLine.includes('all'), archLine)
+check('  ★ 没见过的状态名也照常渲染（原样带出 label，不吞不猜）',
+  api.taskArchiveLine({ taskCounts: [{ status: 'x', label: '', count: 2 }] }).includes('x 2'),
+  api.taskArchiveLine({ taskCounts: [{ status: 'x', label: '', count: 2 }] }))
+check('  没有归档 / 字段缺失 / 不是数组 → 空串（这一行 0 时不占位）',
+  api.taskArchiveLine({ taskCounts: [] }) === '' && api.taskArchiveLine({}) === ''
+  && api.taskArchiveLine({ taskCounts: 'x' }) === '' && api.taskArchiveLine(undefined) === ''
+  && api.taskArchiveLine({ taskCounts: [{ status: 'done', label: '已完成', count: 0 }] }) === '')
+
 // ③ pending：0 不显示、>0 才显示
 check('pending=0 → 空串（这一行一个字都不多）', api.pendingDeliveryLabel(0) === '', api.pendingDeliveryLabel(0))
 check('pending=2 → 显示 2', api.pendingDeliveryLabel(2) === '2 条待确认', api.pendingDeliveryLabel(2))
@@ -628,9 +649,21 @@ check('  小数取整（投递条数只可能是整数，万一是小数也别�
   api.pendingDeliveryLabel(2.7) === '2 条待确认', api.pendingDeliveryLabel(2.7))
 
 // 渲染结构：DOM 起不来，就钉在源码上（本文件一贯做法）
-check('buildRoom：任务板只在有条目时出现（空 → 整块不出现）',
+check('buildRoom：任务板在**有进行中的条目、或只是有归档计数**时都要出现'
+  + '（全做完的房间仍要能说明"它们去哪了"，不许整块消失）',
   buildSrc !== null && buildSrc.includes('var taskRows = taskRowsOf(room)')
-  && buildSrc.includes('if (taskRows.length > 0)'))
+  && buildSrc.includes('if (taskRows.length > 0 || taskCountText !== \'\')'))
+check('  ★ 归档那一行真的画进块里（算出来不放上去 = 白算）',
+  buildSrc !== null && buildSrc.includes('if (taskCountText !== \'\') panel.appendChild(el(\'div\', S.weak, taskCountText))'))
+// ★ 源码网：面板的**代码**里不许再出现任务状态的词表（中文名/英文键的映射）。
+// 这正是今天在"重复投递成因"上抓过的同一形状：客户端自带一份、机制侧再长一份 ✗。
+const srcCode23 = src === null ? null : src
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
+check('  ★ 源码网：面板代码里没有任务状态词表（taskStatusLabel / 待认领 / 已认领 / 已搁置 一个都不许有）',
+  srcCode23 !== null && !/taskStatusLabel/.test(srcCode23)
+  && !/待认领|已认领|已搁置/.test(srcCode23),
+  srcCode23 === null ? null : { taskStatusLabel: /taskStatusLabel/.test(srcCode23), 中文名: /待认领|已认领|已搁置/.test(srcCode23) })
 // 块自己只负责画：从「取数据」到「切回抽屉」之间不许出现 rpc / 事件处理器
 const taskBlock = buildSrc === null ? '' : buildSrc.slice(
   buildSrc.indexOf('var taskRows = taskRowsOf(room)'),

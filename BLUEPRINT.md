@@ -2389,6 +2389,22 @@ queued messages when it resumes*。
   （复用 `detectOverreach`，与 room_declare_change 同一个判据）⇒ 越界从**事后**（改完才 ⚠）提前到**事前**
   （接活时就看见会碰谁的地盘）。而且**不写 @、不登记义务** —— 任务板是分工，不是要谁表态。
 
+  **〔2026-10-06 用户裁定：已完成/已撤销的从面板撤掉并归档〕**
+  原话：*"已完成任务需要从这个撤掉并归档，可查但不需要让各会话的大家看得眼花缭乱"*。
+  当时面板上 38 条里大半是「已完成」，一屏糊满 ⇒ 该看的那几条被淹没 ✗。
+
+  · **归档 = 留在 `state.tasks` 里**（状态仍是 done / dropped），**不是**搬去另一张表 ——
+    "可查"靠的是 `room_task op=list status=done|dropped|all`，搬表只会多一份要对账的东西 ✗；
+  · **面板载荷只发进行中的**（`snapshot` 里按 `ACTIVE_TASK_STATUSES = ['open','claimed']` 过滤）⇒
+    面板天然只画该画的；另外给 `taskCounts`（**带中文名**）⇒ 面板说清"撤掉了多少、怎么查" ✓
+    —— 让它们**无声消失**才是真的错（那会让人以为任务丢了）；
+  · **`room_task op=list` 默认也只列进行中的**（同一个 `ACTIVE_TASK_STATUSES`）＋ 表尾一句
+    「另有 N 条已归档：已完成 x / 已搁置 y —— 要看得说一声：status=done / dropped / all」；
+  · **顺带把状态词表收成一处**：`TASK_STATUSES` / `TASK_STATUS_LABEL` / `ACTIVE_TASK_STATUSES` 都在
+    `rooms.js`，中文名由服务端随载荷给（`statusLabel`）；面板那份 `taskStatusLabel` **删掉**了 ——
+    它是同一份词表的**第二份副本** ✗（而且两份措辞已经漂了：`claimed` 一处写"已认领"、一处写"进行中"），
+    与当天在"重复投递成因"上抓到的是同一个形状。panel 套件里加了源码网：面板代码里不许再出现这些中文名 ✓。
+
 ### ③ 写前体检（它的 `src/invariant.ts`：*replays candidate events before append*）
 **房间原来**：整份 state 直接 `JSON.stringify` 落盘，**写之前没有任何校验** —— 给非成员登记义务、
 回执指向不存在的 seq、依赖成环，都会静默写进去、留在盘上。
