@@ -1502,6 +1502,49 @@ check('★ 帧里的判定取自**存储**（change.verdict），不从正文里
   layeredFrame.includes('git ? 未证实') && !layeredFrame.includes('· git ✓ 已证实'),
   { tail: layeredFrame.slice(-170) })
 
+console.log('22b. 截断的硬约束：切点不得落在代理项中间（2026-10-07 真机：帧切在 emoji 中间 ⇒ 收到它的那一方此后每轮 400、会话锁死）')
+// 这一格不是"渲染难看"：孤立代理项随帧进了别人的会话，就是一条**永久**留在历史里的 user/message，
+// 适配器把它原样序列化进请求体 ⇒ 对方**每个请求**都 400，换账号、发新消息都救不回来。
+// 所以谓词是"帧文本里不许出现孤立代理项"，**不是**"长度对得上"（长度对得上正是它坏的方式）。
+const PAIR_LONE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+const PAIR_EMOJI = '🔴' // U+1F534：UTF-16 里占**两格**，正是 slice() 会切坏的那一类字符
+const pairFrameWith = (agent, marker) => {
+  const hit = callsOf(agent).filter((c) => c.message.content[0].text.includes(marker))
+  return hit.length === 0 ? null : hit.pop().message.content[0].text
+}
+// ① 头（FRAME_HEAD_MAX = 500）：把 emoji 正好摆在**第 500 格**上 —— 真机 #7554 就是这么坏的。
+const pairHeadMark = '代理对反例·头'
+const pairHeadPrefix = '@' + shortOf(B.id) + ' ' + pairHeadMark + ' '
+const pairHeadBody = pairHeadPrefix + 'X'.repeat(499 - pairHeadPrefix.length) + PAIR_EMOJI + 'Y'.repeat(400)
+const pairHeadSeq = (await tool('room_say').execute({ room: bRoomId, text: pairHeadBody }, exec(A))).seq
+const pairHeadStored = (await storedOf(bRoomId)).find((m) => m.seq === pairHeadSeq).body
+// **反例先自证**："没构造出反例"与"构造出来且通过"必须分得开 —— 否则这条网是空的（0 命中先怀疑模式）。
+check('  反例自证：存储正文的第 500 格确实是 ' + PAIR_EMOJI + ' 的高代理（不是"我写了 499 个 X"）',
+  pairHeadStored.charCodeAt(499) >= 0xD800 && pairHeadStored.charCodeAt(499) <= 0xDBFF
+  && pairHeadStored.charCodeAt(500) >= 0xDC00 && pairHeadStored.charCodeAt(500) <= 0xDFFF,
+  { at499: pairHeadStored.charCodeAt(499).toString(16), storedLen: pairHeadStored.length })
+const pairHeadFrame = pairFrameWith(B, pairHeadMark)
+const pairHeadXs = pairHeadFrame === null ? -1 : (pairHeadFrame.match(/X+/) || [''])[0].length
+check('★ 头截断不得切在代理对中间：帧里**没有孤立代理项**，且头比预算少一格（那个 emoji 整个不进头部）',
+  pairHeadFrame !== null && !PAIR_LONE.test(pairHeadFrame) && pairHeadXs === 499 - pairHeadStored.indexOf('X'),
+  { gotFrame: pairHeadFrame !== null, sentXs: pairHeadXs, xStart: pairHeadStored.indexOf('X'), frameLen: pairHeadFrame === null ? 0 : pairHeadFrame.length })
+// ② 尾（FRAME_TAIL_MAX = 280）：让**尾部起点**落在低代理上（孤立**低**代理同样是 400）。
+const pairTailMark = '代理对反例·尾'
+const pairTailPrefix = '@' + shortOf(B.id) + ' ' + pairTailMark + ' '
+const pairTailBody = pairTailPrefix + 'X'.repeat(600) + PAIR_EMOJI + 'Y'.repeat(279)
+const pairTailSeq = (await tool('room_say').execute({ room: bRoomId, text: pairTailBody }, exec(A))).seq
+const pairTailStored = (await storedOf(bRoomId)).find((m) => m.seq === pairTailSeq).body
+const pairTailCut = pairTailStored.length - 280
+check('  反例自证：尾部起点（正文长度 − 280）落在低代理上',
+  pairTailStored.charCodeAt(pairTailCut) >= 0xDC00 && pairTailStored.charCodeAt(pairTailCut) <= 0xDFFF
+  && pairTailStored.charCodeAt(pairTailCut - 1) >= 0xD800 && pairTailStored.charCodeAt(pairTailCut - 1) <= 0xDBFF,
+  { atCut: pairTailStored.charCodeAt(pairTailCut).toString(16), storedLen: pairTailStored.length })
+const pairTailFrame = pairFrameWith(B, pairTailMark)
+const pairTailYs = pairTailFrame === null ? -1 : (pairTailFrame.match(/Y+/) || [''])[0].length
+check('★ 尾截断不得切在代理对中间：帧里**没有孤立代理项**，尾部从低代理的**后一格**起（Y 一个不少）',
+  pairTailFrame !== null && !PAIR_LONE.test(pairTailFrame) && pairTailYs === 279,
+  { gotFrame: pairTailFrame !== null, sentYs: pairTailYs, frameLen: pairTailFrame === null ? 0 : pairTailFrame.length })
+
 console.log('24. 「看一眼」的帧压成一行（实测：审计席 2 小时 175 帧 / 10.5 万 tokens，其中 96% 不要求回执）')
 await rpc('set-enabled', { roomId: bRoomId, sessionId: E.id, enabled: true })
 await tool('room_intent').execute({ room: bRoomId, direction: '自动审计席（看一眼就走，不必回）', watch: 'wake' }, exec(E))
@@ -1529,6 +1572,24 @@ check('  ★ wake 席对**普通发言**是 inject（不唤醒）—— 与 feed
 check('  ★ 存储仍是全文：压缩只发生在**送出去的那一份**',
   (await storedOf(bRoomId)).find((m) => m.seq === freeSeq).body.length > 1200,
   (await storedOf(bRoomId)).find((m) => m.seq === freeSeq).body.length)
+
+// ★ 第三个切点（「看一眼」的 WAKE_DIGEST_MAX = 160）是同一族，**不是**"只有帧的头尾会坏"：
+// 真机 #6045 就切在这儿 —— 对方（审计席）的会话日志里真的留下了那个孤立高代理，
+// 只是那条帧在 splice 时被 canceled、没变成 user/message，才没被咬到。判据不能靠"运气好"。
+const pairDigestMark = '代理对反例·摘要'
+const pairDigestPrefix = '@' + shortOf(B.id) + ' ' + pairDigestMark + ' '
+const pairDigestBody = pairDigestPrefix + 'Q'.repeat(159 - pairDigestPrefix.length) + PAIR_EMOJI + 'R'.repeat(400)
+const pairDigestSeq = (await tool('room_say').execute({ room: bRoomId, text: pairDigestBody }, exec(A))).seq
+const pairDigestStored = (await storedOf(bRoomId)).find((m) => m.seq === pairDigestSeq).body
+check('  反例自证：正文第 160 格是 ' + PAIR_EMOJI + ' 的高代理',
+  pairDigestStored.charCodeAt(159) >= 0xD800 && pairDigestStored.charCodeAt(159) <= 0xDBFF
+  && pairDigestStored.charCodeAt(160) >= 0xDC00 && pairDigestStored.charCodeAt(160) <= 0xDFFF,
+  { at159: pairDigestStored.charCodeAt(159).toString(16), storedLen: pairDigestStored.length })
+const pairDigestFrame = pairFrameWith(E, pairDigestMark)
+check('★ 「看一眼」摘要（160）同样不得切在代理对中间：帧里没有孤立代理项，且确实走的是**一行摘要 + 出口**那条路',
+  pairDigestFrame !== null && !PAIR_LONE.test(pairDigestFrame)
+  && pairDigestFrame.includes('room_message(seq=' + pairDigestSeq + ')'),
+  { gotFrame: pairDigestFrame !== null, frameLen: pairDigestFrame === null ? 0 : pairDigestFrame.length })
 
 console.log('25. 摘要帧的**上界**（审计席结构性反例：join 无上限 ⇒ "帧长有上界"不成立）与"提醒送不出去"的可见性')
 const manyFiles = []
